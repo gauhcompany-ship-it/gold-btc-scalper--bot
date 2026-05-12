@@ -45,29 +45,8 @@ assets_data = {
 }
 
 # ============================================================
-# SIMPLE MARKET DATA FUNCTIONS
+# MARKET DATA FUNCTIONS
 # ============================================================
-
-def get_single_price(symbol):
-    """Get current price only - simpler API call"""
-    try:
-        api_symbol = 'XAU/USD' if symbol == 'XAUUSD' else 'BTC/USD'
-        url = f"https://api.twelvedata.com/price?symbol={api_symbol}&apikey={TWELVE_API_KEY}"
-        print(f"Fetching {symbol} from: {url}")
-        
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        print(f"Response for {symbol}: {data}")
-        
-        if 'price' in data:
-            return float(data['price'])
-        else:
-            print(f"Error for {symbol}: {data.get('message', 'Unknown error')}")
-            return None
-    except Exception as e:
-        print(f"Price error for {symbol}: {e}")
-        return None
 
 def get_full_market_data(symbol):
     """Get time series for RSI calculation"""
@@ -75,11 +54,12 @@ def get_full_market_data(symbol):
         api_symbol = 'XAU/USD' if symbol == 'XAUUSD' else 'BTC/USD'
         url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval=5min&outputsize=30&apikey={TWELVE_API_KEY}"
         
+        print(f"Fetching {symbol} data...")
         response = requests.get(url, timeout=10)
         data = response.json()
         
         if 'values' not in data or not data['values']:
-            print(f"No time series for {symbol}")
+            print(f"No time series for {symbol}: {data}")
             return None
         
         prices = [float(v['close']) for v in data['values']]
@@ -107,7 +87,7 @@ def get_full_market_data(symbol):
                 rsi = 100 - (100 / (1 + rs))
                 rsi = round(rsi, 1)
         
-        # Calculate support/resistance (simple version)
+        # Calculate support/resistance
         recent = prices[-20:]
         high = max(recent)
         low = min(recent)
@@ -115,84 +95,43 @@ def get_full_market_data(symbol):
         support = round(low + (range_val * 0.236), 2)
         resistance = round(high - (range_val * 0.236), 2)
         
+        print(f"✅ {symbol}: ${current_price:.2f}, RSI: {rsi}")
+        
         return {
             'price': current_price,
             'rsi': rsi,
             'support': support,
-            'resistance': resistance,
-            'prices': prices
+            'resistance': resistance
         }
     except Exception as e:
         print(f"Market data error for {symbol}: {e}")
         return None
 
-# ============================================================
-# SIMPLE AI SIGNAL
-# ============================================================
-
 def get_ai_signal(asset_key, market_data):
-    """Get trading signal from Groq AI"""
+    """Get trading signal"""
     price = market_data['price']
     rsi = market_data['rsi']
     support = market_data['support']
     resistance = market_data['resistance']
     
-    # Simple rule-based logic first
-    signal = 'HOLD'
-    reasoning = ''
-    
+    # Simple rule-based logic
     if rsi < 35 and price <= support * 1.005:
         signal = 'BUY'
-        reasoning = f'RSI oversold ({rsi}) and price near support (${support})'
+        reasoning = f'RSI oversold ({rsi}) near support (${support})'
     elif rsi > 65 and price >= resistance * 0.995:
         signal = 'SELL'
-        reasoning = f'RSI overbought ({rsi}) and price near resistance (${resistance})'
+        reasoning = f'RSI overbought ({rsi}) near resistance (${resistance})'
     else:
-        reasoning = f'RSI at {rsi} - waiting for setup near support/resistance'
+        signal = 'HOLD'
+        reasoning = f'RSI at {rsi} - no clear signal'
     
-    # Try Groq for better analysis
-    if GROQ_API_KEY and GROQ_API_KEY != "gsk_":
-        try:
-            prompt = f"""XAUUSD price: ${price}, RSI: {rsi}, Support: ${support}, Resistance: ${resistance}. 
-            Reply with JSON only: {{"signal":"BUY/SELL/HOLD", "reason":"short"}}"""
-            
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            data = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 100
-            }
-            
-            response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content']
-                import re
-                json_match = re.search(r'\{.*\}', content)
-                if json_match:
-                    groq_result = json.loads(json_match.group())
-                    if groq_result.get('signal') in ['BUY', 'SELL', 'HOLD']:
-                        signal = groq_result.get('signal')
-                        reasoning = groq_result.get('reason', reasoning)
-        except Exception as e:
-            print(f"Groq error: {e}")
-    
-    # Set TP/SL based on signal
+    # Set TP/SL
     if signal == 'BUY':
-        tp = price * (1.005 if asset_key == 'XAUUSD' else 1.01)
-        sl = price * (0.995 if asset_key == 'XAUUSD' else 0.99)
+        tp = round(price * (1.005 if asset_key == 'XAUUSD' else 1.01), 2)
+        sl = round(price * (0.995 if asset_key == 'XAUUSD' else 0.99), 2)
     elif signal == 'SELL':
-        tp = price * (0.995 if asset_key == 'XAUUSD' else 0.99)
-        sl = price * (1.005 if asset_key == 'XAUUSD' else 1.01)
+        tp = round(price * (0.995 if asset_key == 'XAUUSD' else 0.99), 2)
+        sl = round(price * (1.005 if asset_key == 'XAUUSD' else 1.01), 2)
     else:
         tp = price
         sl = price
@@ -200,8 +139,8 @@ def get_ai_signal(asset_key, market_data):
     return {
         'signal': signal,
         'confidence': 'Medium',
-        'take_profit': round(tp, 2),
-        'stop_loss': round(sl, 2),
+        'take_profit': tp,
+        'stop_loss': sl,
         'reasoning': reasoning
     }
 
@@ -210,9 +149,9 @@ def get_ai_signal(asset_key, market_data):
 # ============================================================
 
 def trading_bot_loop():
-    """Main trading loop"""
+    """Main trading loop - runs in background"""
     print("=" * 50)
-    print("🤖 Trading Bot Started!")
+    print("🤖 TRADING BOT STARTED!")
     print("=" * 50)
     print(f"Twelve Data Key: {TWELVE_API_KEY[:10]}...")
     print(f"Groq Key: {GROQ_API_KEY[:15]}...")
@@ -221,23 +160,15 @@ def trading_bot_loop():
     while True:
         for asset_key in ['XAUUSD', 'BTCUSD']:
             try:
-                print(f"\n--- Fetching {asset_key} at {datetime.now().strftime('%H:%M:%S')} ---")
+                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Fetching {asset_key}...")
                 
-                # Get market data
                 market_data = get_full_market_data(asset_key)
                 
                 if market_data and market_data['price']:
-                    current_price = market_data['price']
-                    print(f"✅ {asset_key} Price: ${current_price:.2f}")
-                    print(f"   RSI: {market_data['rsi']}, Support: ${market_data['support']}, Resistance: ${market_data['resistance']}")
-                    
-                    # Get AI signal
                     analysis = get_ai_signal(asset_key, market_data)
-                    print(f"   Signal: {analysis['signal']} - {analysis['reasoning']}")
                     
-                    # Update global data
                     assets_data[asset_key] = {
-                        'price': current_price,
+                        'price': market_data['price'],
                         'rsi': market_data['rsi'],
                         'support': market_data['support'],
                         'resistance': market_data['resistance'],
@@ -249,17 +180,17 @@ def trading_bot_loop():
                         'reasoning': analysis['reasoning'],
                         'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
+                    
+                    print(f"   Price: ${market_data['price']:.2f} | Signal: {analysis['signal']}")
                 else:
-                    print(f"❌ No market data for {asset_key}")
-                    assets_data[asset_key]['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"   ❌ No data for {asset_key}")
                 
-                time.sleep(3)  # Small delay between assets
+                time.sleep(3)
                 
             except Exception as e:
-                print(f"Error in {asset_key} loop: {e}")
+                print(f"Error in {asset_key}: {e}")
         
-        # Wait 60 seconds before next cycle
-        print(f"\n⏳ Waiting 60 seconds... Next update at {datetime.now().strftime('%H:%M:%S')}")
+        print(f"\n⏳ Waiting 60 seconds...")
         time.sleep(60)
 
 # ============================================================
@@ -324,16 +255,15 @@ HTML_TEMPLATE = """
 <div class="container">
     <div class="header">
         <h1>⚡ AI Dual Scalper</h1>
-        <p>XAUUSD + BTCUSD | Real Market Data | Groq AI Analysis | 5-Min Timeframe</p>
+        <p>XAUUSD + BTCUSD | Real Market Data | 5-Min Timeframe</p>
     </div>
 
     <div class="dual-grid">
-        <!-- XAUUSD -->
         <div class="card">
             <h2>🥇 XAUUSD (Gold)</h2>
             <div class="price">${{ "%.2f"|format(xau.price) if xau.price else '---' }}</div>
             <div class="stats">
-                <div class="stat"><div class="stat-label">RSI (14)</div><div class="stat-value">{{ xau.rsi if xau.rsi else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">RSI</div><div class="stat-value">{{ xau.rsi if xau.rsi else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Support</div><div class="stat-value">${{ "%.2f"|format(xau.support) if xau.support else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value">${{ "%.2f"|format(xau.resistance) if xau.resistance else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Signal</div><div class="stat-value">{{ xau.signal }}</div></div>
@@ -342,12 +272,11 @@ HTML_TEMPLATE = """
             <div class="reasoning">💭 {{ xau.reasoning }}</div>
         </div>
 
-        <!-- BTCUSD -->
         <div class="card">
             <h2>₿ BTCUSD (Bitcoin)</h2>
             <div class="price">${{ "%.0f"|format(btc.price) if btc.price else '---' }}</div>
             <div class="stats">
-                <div class="stat"><div class="stat-label">RSI (14)</div><div class="stat-value">{{ btc.rsi if btc.rsi else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">RSI</div><div class="stat-value">{{ btc.rsi if btc.rsi else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Support</div><div class="stat-value">${{ "%.0f"|format(btc.support) if btc.support else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value">${{ "%.0f"|format(btc.resistance) if btc.resistance else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Signal</div><div class="stat-value">{{ btc.signal }}</div></div>
@@ -361,7 +290,6 @@ HTML_TEMPLATE = """
         Last update: {{ xau.last_update if xau.last_update else 'Waiting for data...' }}
     </div>
 </div>
-
 <script>
     setInterval(function() { location.reload(); }, 10000);
 </script>
@@ -380,22 +308,24 @@ def api_all():
     return jsonify(assets_data)
 
 # ============================================================
-# MAIN ENTRY POINT - THIS MUST BE AT THE BOTTOM
+# START THE BOT THREAD WHEN APP INITIALIZES
+# ============================================================
+
+print("🚀 Starting AI Dual Scalper...")
+print("   Initializing trading bot thread...")
+
+# Start trading bot in background thread
+bot_thread = threading.Thread(target=trading_bot_loop, daemon=True)
+bot_thread.start()
+print("✅ Trading bot thread started!")
+
+print("   Web server will start shortly...")
+print("=" * 50)
+
+# ============================================================
+# RUN THE APP (for local testing)
 # ============================================================
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("🚀 AI Dual Scalper Starting...")
-    print("=" * 50)
-    
-    # Start trading bot in background thread
-    bot_thread = threading.Thread(target=trading_bot_loop, daemon=True)
-    bot_thread.start()
-    print("✅ Trading bot thread started!")
-    
-    # Start web server
     port = int(os.environ.get('PORT', 5000))
-    print(f"🌐 Web dashboard on port {port}")
-    print("=" * 50)
-    
     app.run(host='0.0.0.0', port=port)
