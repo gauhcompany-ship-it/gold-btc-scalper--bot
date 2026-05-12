@@ -11,7 +11,6 @@ app = Flask(__name__)
 # ============================================================
 # CONFIGURATION - PUT YOUR API KEYS DIRECTLY HERE
 # ============================================================
-# IMPORTANT: Replace these with your actual keys!
 GROQ_API_KEY = "gsk_inI4X1nm01tkaXEcjJ0GWGdyb3FYWnllwn7anFXMDF4n9lITR0u4hF"
 TWELVE_API_KEY = "9663744f36eb47da84d6ddd016afaaace"
 
@@ -52,7 +51,6 @@ assets_data = {
 def get_single_price(symbol):
     """Get current price only - simpler API call"""
     try:
-        # Map symbol for Twelve Data
         api_symbol = 'XAU/USD' if symbol == 'XAUUSD' else 'BTC/USD'
         url = f"https://api.twelvedata.com/price?symbol={api_symbol}&apikey={TWELVE_API_KEY}"
         print(f"Fetching {symbol} from: {url}")
@@ -129,26 +127,17 @@ def get_full_market_data(symbol):
         return None
 
 # ============================================================
-# SIMPLE AI SIGNAL (No complex prompting)
+# SIMPLE AI SIGNAL
 # ============================================================
 
 def get_ai_signal(asset_key, market_data):
     """Get trading signal from Groq AI"""
-    if not GROQ_API_KEY or GROQ_API_KEY == "gsk_":
-        return {
-            'signal': 'HOLD',
-            'confidence': 'Low',
-            'take_profit': market_data['price'] * 1.005 if asset_key == 'XAUUSD' else market_data['price'] * 1.01,
-            'stop_loss': market_data['price'] * 0.995 if asset_key == 'XAUUSD' else market_data['price'] * 0.99,
-            'reasoning': 'Groq API key not configured'
-        }
-    
     price = market_data['price']
     rsi = market_data['rsi']
     support = market_data['support']
     resistance = market_data['resistance']
     
-    # Simple rule-based logic first (fallback)
+    # Simple rule-based logic first
     signal = 'HOLD'
     reasoning = ''
     
@@ -162,40 +151,40 @@ def get_ai_signal(asset_key, market_data):
         reasoning = f'RSI at {rsi} - waiting for setup near support/resistance'
     
     # Try Groq for better analysis
-    try:
-        prompt = f"""XAUUSD price: ${price}, RSI: {rsi}, Support: ${support}, Resistance: ${resistance}. 
-        Reply with JSON only: {{"signal":"BUY/SELL/HOLD", "reason":"short"}}"""
-        
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 100
-        }
-        
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            content = result['choices'][0]['message']['content']
-            # Try to parse JSON response
-            import re
-            json_match = re.search(r'\{.*\}', content)
-            if json_match:
-                groq_result = json.loads(json_match.group())
-                if groq_result.get('signal') in ['BUY', 'SELL', 'HOLD']:
-                    signal = groq_result.get('signal')
-                    reasoning = groq_result.get('reason', reasoning)
-    except Exception as e:
-        print(f"Groq error: {e}")
+    if GROQ_API_KEY and GROQ_API_KEY != "gsk_":
+        try:
+            prompt = f"""XAUUSD price: ${price}, RSI: {rsi}, Support: ${support}, Resistance: ${resistance}. 
+            Reply with JSON only: {{"signal":"BUY/SELL/HOLD", "reason":"short"}}"""
+            
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 100
+            }
+            
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result['choices'][0]['message']['content']
+                import re
+                json_match = re.search(r'\{.*\}', content)
+                if json_match:
+                    groq_result = json.loads(json_match.group())
+                    if groq_result.get('signal') in ['BUY', 'SELL', 'HOLD']:
+                        signal = groq_result.get('signal')
+                        reasoning = groq_result.get('reason', reasoning)
+        except Exception as e:
+            print(f"Groq error: {e}")
     
     # Set TP/SL based on signal
     if signal == 'BUY':
@@ -222,14 +211,17 @@ def get_ai_signal(asset_key, market_data):
 
 def trading_bot_loop():
     """Main trading loop"""
+    print("=" * 50)
     print("🤖 Trading Bot Started!")
+    print("=" * 50)
     print(f"Twelve Data Key: {TWELVE_API_KEY[:10]}...")
     print(f"Groq Key: {GROQ_API_KEY[:15]}...")
+    print("=" * 50)
     
     while True:
         for asset_key in ['XAUUSD', 'BTCUSD']:
             try:
-                print(f"\n--- Fetching {asset_key} ---")
+                print(f"\n--- Fetching {asset_key} at {datetime.now().strftime('%H:%M:%S')} ---")
                 
                 # Get market data
                 market_data = get_full_market_data(asset_key)
@@ -296,6 +288,7 @@ HTML_TEMPLATE = """
             padding: 20px;
             margin-bottom: 24px;
             border: 1px solid #1e293b;
+            text-align: center;
         }
         .header h1 { font-size: 1.5rem; color: #fbbf24; }
         .dual-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
@@ -343,7 +336,7 @@ HTML_TEMPLATE = """
                 <div class="stat"><div class="stat-label">RSI (14)</div><div class="stat-value">{{ xau.rsi if xau.rsi else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Support</div><div class="stat-value">${{ "%.2f"|format(xau.support) if xau.support else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value">${{ "%.2f"|format(xau.resistance) if xau.resistance else '---' }}</div></div>
-                <div class="stat"><div class="stat-label">Position</div><div class="stat-value">{{ xau.position if xau.position else 'NONE' }}</div></div>
+                <div class="stat"><div class="stat-label">Signal</div><div class="stat-value">{{ xau.signal }}</div></div>
             </div>
             <div class="signal signal-{{ xau.signal }}">{{ xau.signal }}</div>
             <div class="reasoning">💭 {{ xau.reasoning }}</div>
@@ -357,7 +350,7 @@ HTML_TEMPLATE = """
                 <div class="stat"><div class="stat-label">RSI (14)</div><div class="stat-value">{{ btc.rsi if btc.rsi else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Support</div><div class="stat-value">${{ "%.0f"|format(btc.support) if btc.support else '---' }}</div></div>
                 <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value">${{ "%.0f"|format(btc.resistance) if btc.resistance else '---' }}</div></div>
-                <div class="stat"><div class="stat-label">Position</div><div class="stat-value">{{ btc.position if btc.position else 'NONE' }}</div></div>
+                <div class="stat"><div class="stat-label">Signal</div><div class="stat-value">{{ btc.signal }}</div></div>
             </div>
             <div class="signal signal-{{ btc.signal }}">{{ btc.signal }}</div>
             <div class="reasoning">💭 {{ btc.reasoning }}</div>
@@ -370,7 +363,7 @@ HTML_TEMPLATE = """
 </div>
 
 <script>
-    setInterval(function() { location.reload(); }, 30000);
+    setInterval(function() { location.reload(); }, 10000);
 </script>
 </body>
 </html>
@@ -387,7 +380,7 @@ def api_all():
     return jsonify(assets_data)
 
 # ============================================================
-# MAIN
+# MAIN ENTRY POINT - THIS MUST BE AT THE BOTTOM
 # ============================================================
 
 if __name__ == '__main__':
@@ -395,12 +388,14 @@ if __name__ == '__main__':
     print("🚀 AI Dual Scalper Starting...")
     print("=" * 50)
     
-    # Start trading bot thread
+    # Start trading bot in background thread
     bot_thread = threading.Thread(target=trading_bot_loop, daemon=True)
     bot_thread.start()
+    print("✅ Trading bot thread started!")
     
     # Start web server
     port = int(os.environ.get('PORT', 5000))
     print(f"🌐 Web dashboard on port {port}")
+    print("=" * 50)
     
     app.run(host='0.0.0.0', port=port)
