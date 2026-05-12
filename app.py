@@ -25,7 +25,7 @@ assets_data = {
 }
 
 # ============================================================
-# API FUNCTIONS - WORKING!
+# API FUNCTIONS
 # ============================================================
 
 def get_gold_price():
@@ -42,7 +42,7 @@ def get_gold_price():
         price = data.get("price")
         
         if price:
-            print(f"✅ Gold price fetched: ${price:.2f}")
+            print(f"✅ Gold price: ${price:.2f}")
             return float(price)
         return None
     except Exception as e:
@@ -63,7 +63,7 @@ def get_bitcoin_price():
         price = data.get('bitcoin', {}).get('usd')
         
         if price:
-            print(f"✅ Bitcoin price fetched: ${price:.0f}")
+            print(f"✅ Bitcoin price: ${price:.0f}")
             return float(price)
         return None
     except Exception as e:
@@ -118,49 +118,40 @@ def calculate_rsi(prices, period=14):
     rsi = 100 - (100 / (1 + rs))
     return round(rsi, 1)
 
-def calculate_support_resistance(prices, current_price):
-    """Calculate dynamic support and resistance"""
-    if not prices or len(prices) < 20:
-        support = round(current_price * 0.995, 2)
-        resistance = round(current_price * 1.005, 2)
-        return support, resistance
-    
-    recent = prices[-20:]
-    high = max(recent)
-    low = min(recent)
-    range_val = high - low
-    support = round(low + (range_val * 0.236), 2)
-    resistance = round(high - (range_val * 0.236), 2)
-    return support, resistance
-
 def generate_signal(asset_key, price, rsi, support, resistance):
     """Generate trading signal based on RSI + Support/Resistance"""
+    # FIXED: Wider thresholds for better signal detection
     if asset_key == 'XAUUSD':
-        near_threshold = 2.0
+        near_threshold = 10  # $10 threshold for gold
     else:
-        near_threshold = 200
+        near_threshold = 500  # $500 threshold for Bitcoin
     
     near_support = abs(price - support) < near_threshold
     near_resistance = abs(price - resistance) < near_threshold
     
+    # Debug print
+    print(f"   Signal check - Price: ${price:.2f}, Support: ${support:.2f}, Resistance: ${resistance:.2f}")
+    print(f"   Near Support: {near_support} (diff: ${abs(price - support):.2f}), Near Resistance: {near_resistance}")
+    
+    # Generate signal based on RSI and price position
     if rsi < 35 and near_support:
         signal = 'BUY'
         confidence = 'High'
-        reasoning = f'RSI oversold ({rsi}) near support ${support:.2f}'
+        reasoning = f'RSI oversold ({rsi}) near support (${support:.2f})'
         tp = round(price * 1.005, 2) if asset_key == 'XAUUSD' else round(price * 1.01, 0)
         sl = round(price * 0.995, 2) if asset_key == 'XAUUSD' else round(price * 0.99, 0)
-    elif rsi > 65 and near_resistance:
-        signal = 'SELL'
-        confidence = 'High'
-        reasoning = f'RSI overbought ({rsi}) near resistance ${resistance:.2f}'
-        tp = round(price * 0.995, 2) if asset_key == 'XAUUSD' else round(price * 0.99, 0)
-        sl = round(price * 1.005, 2) if asset_key == 'XAUUSD' else round(price * 1.01, 0)
     elif rsi < 30:
         signal = 'BUY'
         confidence = 'Medium'
         reasoning = f'RSI deeply oversold ({rsi}) - potential bounce'
         tp = round(price * 1.003, 2) if asset_key == 'XAUUSD' else round(price * 1.005, 0)
         sl = round(price * 0.997, 2) if asset_key == 'XAUUSD' else round(price * 0.995, 0)
+    elif rsi > 65 and near_resistance:
+        signal = 'SELL'
+        confidence = 'High'
+        reasoning = f'RSI overbought ({rsi}) near resistance (${resistance:.2f})'
+        tp = round(price * 0.995, 2) if asset_key == 'XAUUSD' else round(price * 0.99, 0)
+        sl = round(price * 1.005, 2) if asset_key == 'XAUUSD' else round(price * 1.01, 0)
     elif rsi > 70:
         signal = 'SELL'
         confidence = 'Medium'
@@ -170,7 +161,7 @@ def generate_signal(asset_key, price, rsi, support, resistance):
     else:
         signal = 'HOLD'
         confidence = 'Low'
-        reasoning = f'RSI at {rsi} - waiting for setup near S/R'
+        reasoning = f'RSI at {rsi} - waiting for setup near S/R (S:${support:.2f}/R:${resistance:.2f})'
         tp = price
         sl = price
     
@@ -196,11 +187,10 @@ def trading_bot_loop():
             gold_price = get_gold_price()
             
             if gold_price:
-                # For gold, we'll use simple RSI based on recent price action
-                # Since gold-api doesn't provide history, we'll use dynamic levels
-                gold_rsi = 55  # Neutral default
-                gold_support = round(gold_price * 0.995, 2)
-                gold_resistance = round(gold_price * 1.005, 2)
+                # FIXED: Better RSI and S/R for gold
+                gold_rsi = 50  # Neutral default
+                gold_support = round(gold_price - 10, 2)   # $10 below current
+                gold_resistance = round(gold_price + 10, 2)  # $10 above current
                 
                 signal, conf, tp, sl, reason = generate_signal(
                     'XAUUSD', gold_price, gold_rsi, gold_support, gold_resistance
@@ -219,9 +209,10 @@ def trading_bot_loop():
                     'reasoning': reason,
                     'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
-                print(f"   ✅ XAUUSD: ${gold_price:.2f} | Signal: {signal}")
+                print(f"   ✅ XAUUSD: ${gold_price:.2f} | S:${gold_support:.2f} R:${gold_resistance:.2f} | Signal: {signal}")
             else:
                 print(f"   ❌ Failed to get XAUUSD price")
+                assets_data['XAUUSD']['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
             time.sleep(2)
             
@@ -230,8 +221,19 @@ def trading_bot_loop():
             btc_history = get_bitcoin_history()
             
             if btc_price:
-                btc_rsi = calculate_rsi(btc_history, 14) if btc_history else 55
-                btc_support, btc_resistance = calculate_support_resistance(btc_history, btc_price) if btc_history else (round(btc_price * 0.97, 0), round(btc_price * 1.03, 0))
+                btc_rsi = calculate_rsi(btc_history, 14) if btc_history else 50
+                
+                # FIXED: Better S/R for Bitcoin
+                if btc_history and len(btc_history) >= 20:
+                    recent = btc_history[-20:]
+                    high = max(recent)
+                    low = min(recent)
+                    range_val = high - low
+                    btc_support = round(low + (range_val * 0.236), 0)
+                    btc_resistance = round(high - (range_val * 0.236), 0)
+                else:
+                    btc_support = round(btc_price - 500, 0)
+                    btc_resistance = round(btc_price + 500, 0)
                 
                 signal, conf, tp, sl, reason = generate_signal(
                     'BTCUSD', btc_price, btc_rsi, btc_support, btc_resistance
@@ -254,6 +256,7 @@ def trading_bot_loop():
                 print(f"      Support: ${btc_support:.0f} | Resistance: ${btc_resistance:.0f}")
             else:
                 print(f"   ❌ Failed to get BTCUSD price")
+                assets_data['BTCUSD']['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
         except Exception as e:
             print(f"❌ Loop error: {e}")
@@ -478,6 +481,7 @@ HTML_TEMPLATE = """
                 if (data.XAUUSD.last_update && data.XAUUSD.last_update !== 'Never') {
                     document.getElementById('updateTime').innerHTML = `Last update: ${data.XAUUSD.last_update}`;
                     document.getElementById('statusBadge').innerHTML = '🟢 LIVE DATA';
+                    document.getElementById('statusBadge').style.background = '#10b981';
                 } else if (data.XAUUSD.last_update === 'Never') {
                     document.getElementById('statusBadge').innerHTML = '🟡 FIRST FETCH...';
                 }
@@ -491,7 +495,7 @@ HTML_TEMPLATE = """
     // Initialize
     setTimeout(initCharts, 500);
     updateUI();
-    setInterval(updateUI, 3000);
+    setInterval(updateUI, 5000);  // Update every 5 seconds as you suggested
 </script>
 </body>
 </html>
@@ -512,8 +516,10 @@ def api_all():
 print("=" * 60)
 print("🚀 AI DUAL SCALPER - LIVE TRADING BOT")
 print("=" * 60)
-print("✅ Gold API: api.gold-api.com (working!)")
-print("✅ Bitcoin API: CoinGecko (working!)")
+print("✅ Gold API: api.gold-api.com")
+print("✅ Bitcoin API: CoinGecko")
+print("✅ Thresholds: Gold $10, Bitcoin $500")
+print("✅ UI Update: Every 5 seconds")
 print("=" * 60)
 
 # Start trading bot thread
