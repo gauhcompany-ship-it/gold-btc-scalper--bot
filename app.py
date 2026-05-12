@@ -11,8 +11,8 @@ app = Flask(__name__)
 # ============================================================
 # CONFIGURATION - PUT YOUR API KEYS DIRECTLY HERE
 # ============================================================
-GROQ_API_KEY = "gsk_inI4X1nm01tkaXEcjJ0GWGdyb3FYWnllwn7anFXMDF4n9lITR0u4hF"
-TWELVE_API_KEY = "9663744f36eb47da84d6ddd016afaaace"
+GROQ_API_KEY = "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"
+TWELVE_API_KEY = "4e1b31d1604d4d42b9e6434b6fbf0b2f"
 
 # Global data storage
 assets_data = {
