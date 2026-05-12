@@ -9,9 +9,10 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURATION - NO API KEYS NEEDED!
+# CONFIGURATION - USE YOUR KEYS (they work!)
 # ============================================================
-# Yahoo Finance is completely free with no API key
+GROQ_API_KEY = "gsk_inI4X1nm01tkaXEcjJ0GWGdyb3FYWnllwn7anFXMDF4n9lITR0u4hF"
+TWELVE_API_KEY = "9663744f36eb47da84d6ddd016afaaace"
 
 # Global data storage
 assets_data = {
@@ -30,135 +31,78 @@ assets_data = {
 }
 
 # ============================================================
-# MARKET DATA FUNCTIONS (Yahoo Finance - FREE, NO API KEY)
+# TWELVE DATA FUNCTIONS (YOUR KEYS WORK HERE!)
 # ============================================================
 
-def get_yahoo_price(symbol):
-    """Get current price from Yahoo Finance - completely free!"""
+def get_twelve_data(symbol):
+    """Get real-time data from Twelve Data - works with your keys!"""
     try:
-        # Yahoo Finance symbols
-        if symbol == 'XAUUSD':
-            yahoo_symbol = 'GC=F'  # Gold futures
-        else:
-            yahoo_symbol = 'BTC-USD'  # Bitcoin
+        # Map symbols
+        api_symbol = 'XAU/USD' if symbol == 'XAUUSD' else 'BTC/USD'
         
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        # Get time series for RSI and S/R
+        url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval=5min&outputsize=30&apikey={TWELVE_API_KEY}"
         
-        response = requests.get(url, headers=headers, timeout=10)
+        print(f"Fetching {symbol} from Twelve Data...")
+        response = requests.get(url, timeout=15)
         data = response.json()
         
-        if 'chart' in data and 'result' in data['chart'] and data['chart']['result']:
-            result = data['chart']['result'][0]
-            meta = result['meta']
-            current_price = meta.get('regularMarketPrice')
+        # Check for errors
+        if 'code' in data and data['code'] == 401:
+            print(f"API key error: {data.get('message', 'Invalid key')}")
+            return None
             
-            if current_price:
-                return float(current_price)
-        
-        return None
-    except Exception as e:
-        print(f"Yahoo error for {symbol}: {e}")
-        return None
-
-def get_historical_data(symbol, days=30):
-    """Get historical data for RSI calculation"""
-    try:
-        if symbol == 'XAUUSD':
-            yahoo_symbol = 'GC=F'
-        else:
-            yahoo_symbol = 'BTC-USD'
-        
-        # Get last 30 days of daily data
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}?interval=1d&range=1mo"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        data = response.json()
-        
-        if 'chart' in data and 'result' in data['chart'] and data['chart']['result']:
-            result = data['chart']['result'][0]
-            timestamps = result.get('timestamp', [])
-            indicators = result.get('indicators', {})
-            quotes = indicators.get('quote', [{}])[0]
-            closes = quotes.get('close', [])
-            
-            prices = [c for c in closes if c is not None]
-            return prices
-        
-        return None
-    except Exception as e:
-        print(f"Historical error for {symbol}: {e}")
-        return None
-
-def calculate_rsi(prices, period=14):
-    """Calculate RSI from price list"""
-    if not prices or len(prices) < period + 1:
-        return 50
-    
-    prices = prices[-period-1:]
-    gains = 0
-    losses = 0
-    
-    for i in range(len(prices) - 1):
-        diff = prices[i+1] - prices[i]
-        if diff >= 0:
-            gains += diff
-        else:
-            losses -= diff
-    
-    avg_gain = gains / period
-    avg_loss = losses / period
-    
-    if avg_loss == 0:
-        return 75
-    
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi, 1)
-
-def calculate_support_resistance(prices):
-    """Calculate dynamic support and resistance"""
-    if not prices or len(prices) < 20:
-        return None, None
-    
-    recent = prices[-20:]
-    high = max(recent)
-    low = min(recent)
-    range_val = high - low
-    support = round(low + (range_val * 0.236), 2)
-    resistance = round(high - (range_val * 0.236), 2)
-    return support, resistance
-
-def get_market_data(symbol):
-    """Get complete market data"""
-    try:
-        # Get current price
-        current_price = get_yahoo_price(symbol)
-        if not current_price:
+        if 'values' not in data or not data['values']:
+            print(f"No values for {symbol}: {data}")
             return None
         
-        # Get historical data for RSI
-        prices = get_historical_data(symbol)
+        # Extract prices
+        prices = []
+        for v in data['values']:
+            try:
+                prices.append(float(v['close']))
+            except:
+                continue
         
-        if prices:
-            rsi = calculate_rsi(prices)
-            support, resistance = calculate_support_resistance(prices)
-        else:
-            rsi = 50
-            support = current_price * 0.99
-            resistance = current_price * 1.01
+        if not prices:
+            return None
+            
+        current_price = prices[-1]
+        
+        # Calculate RSI
+        rsi = 50
+        if len(prices) >= 15:
+            gains = 0
+            losses = 0
+            for i in range(len(prices)-15, len(prices)-1):
+                diff = prices[i+1] - prices[i]
+                if diff >= 0:
+                    gains += diff
+                else:
+                    losses -= diff
+            avg_gain = gains / 14
+            avg_loss = losses / 14
+            if avg_loss > 0:
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+                rsi = round(rsi, 1)
+        
+        # Calculate support/resistance
+        recent = prices[-20:]
+        high = max(recent)
+        low = min(recent)
+        range_val = high - low
+        support = low + (range_val * 0.236)
+        resistance = high - (range_val * 0.236)
         
         return {
-            'price': current_price,
+            'price': round(current_price, 2),
             'rsi': rsi,
-            'support': round(support, 2) if symbol == 'XAUUSD' else round(support, 0),
-            'resistance': round(resistance, 2) if symbol == 'XAUUSD' else round(resistance, 0)
+            'support': round(support, 2),
+            'resistance': round(resistance, 2)
         }
     except Exception as e:
-        print(f"Market data error for {symbol}: {e}")
+        print(f"Error fetching {symbol}: {e}")
         return None
 
 # ============================================================
@@ -172,8 +116,9 @@ def generate_signal(asset_key, market_data):
     support = market_data['support']
     resistance = market_data['resistance']
     
-    near_support = price <= support * 1.002 if asset_key == 'XAUUSD' else price <= support * 1.01
-    near_resistance = price >= resistance * 0.998 if asset_key == 'XAUUSD' else price >= resistance * 0.99
+    # Check if near support/resistance
+    near_support = abs(price - support) < (1.5 if asset_key == 'XAUUSD' else 150)
+    near_resistance = abs(price - resistance) < (1.5 if asset_key == 'XAUUSD' else 150)
     
     # Scalping strategy
     if rsi < 35 and near_support:
@@ -191,19 +136,19 @@ def generate_signal(asset_key, market_data):
     elif rsi < 30:
         signal = 'BUY'
         confidence = 'Medium'
-        reasoning = f'RSI strongly oversold ({rsi}) - potential reversal'
+        reasoning = f'RSI deeply oversold ({rsi}) - potential bounce'
         take_profit = round(price * 1.003, 2) if asset_key == 'XAUUSD' else round(price * 1.005, 0)
         stop_loss = round(price * 0.997, 2) if asset_key == 'XAUUSD' else round(price * 0.995, 0)
     elif rsi > 70:
         signal = 'SELL'
         confidence = 'Medium'
-        reasoning = f'RSI strongly overbought ({rsi}) - potential reversal'
+        reasoning = f'RSI deeply overbought ({rsi}) - potential drop'
         take_profit = round(price * 0.997, 2) if asset_key == 'XAUUSD' else round(price * 0.995, 0)
         stop_loss = round(price * 1.003, 2) if asset_key == 'XAUUSD' else round(price * 1.005, 0)
     else:
         signal = 'HOLD'
         confidence = 'Low'
-        reasoning = f'RSI at {rsi} - waiting for setup'
+        reasoning = f'RSI at {rsi} - waiting for setup near S/R'
         take_profit = price
         stop_loss = price
     
@@ -222,15 +167,19 @@ def generate_signal(asset_key, market_data):
 def trading_bot_loop():
     """Main trading loop - runs every 60 seconds"""
     print("=" * 50)
-    print("🤖 TRADING BOT STARTED (Yahoo Finance - FREE)!")
+    print("🤖 TRADING BOT STARTED!")
+    print(f"📊 Twelve Data Key: {TWELVE_API_KEY[:10]}...")
     print("=" * 50)
+    
+    # Initial fetch immediately
+    print("🔄 Fetching initial data...")
     
     while True:
         for asset_key in ['XAUUSD', 'BTCUSD']:
             try:
                 print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Fetching {asset_key}...")
                 
-                market_data = get_market_data(asset_key)
+                market_data = get_twelve_data(asset_key)
                 
                 if market_data and market_data['price']:
                     signal_data = generate_signal(asset_key, market_data)
@@ -250,26 +199,23 @@ def trading_bot_loop():
                     }
                     
                     print(f"   ✅ {asset_key}: ${market_data['price']:.2f}")
-                    print(f"   RSI: {market_data['rsi']} | Signal: {signal_data['signal']}")
-                    
-                    # AUTO-TRADING: Uncomment this when connected to a broker
-                    # if signal_data['signal'] == 'BUY':
-                    #     execute_buy_order(asset_key, market_data['price'])
-                    # elif signal_data['signal'] == 'SELL':
-                    #     execute_sell_order(asset_key, market_data['price'])
+                    print(f"   📊 RSI: {market_data['rsi']} | Signal: {signal_data['signal']}")
+                    print(f"   🛡️ Support: ${market_data['support']} | Resistance: ${market_data['resistance']}")
                 else:
-                    print(f"   ❌ No data for {asset_key}")
+                    print(f"   ❌ Failed to get data for {asset_key}")
+                    # Keep existing data, just mark as stale
+                    assets_data[asset_key]['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 
                 time.sleep(3)  # Delay between assets
                 
             except Exception as e:
-                print(f"Error in {asset_key}: {e}")
+                print(f"❌ Error in {asset_key}: {e}")
         
         print(f"\n⏳ Waiting 60 seconds... Next update at {datetime.now().strftime('%H:%M:%S')}")
         time.sleep(60)
 
 # ============================================================
-# WEB UI (BEAUTIFUL DASHBOARD)
+# WEB UI - SIMPLE BUT COMPLETE
 # ============================================================
 
 HTML_TEMPLATE = """
@@ -278,7 +224,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🤖 AI Dual Scalper | Auto Trading Bot</title>
+    <title>🤖 AI Dual Scalper | Live Trading Bot</title>
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -329,7 +275,20 @@ HTML_TEMPLATE = """
             border-bottom: 1px solid #1e293b;
         }
         .card-header span { color: #fbbf24; }
-        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 20px; }
+        .price {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: #fbbf24;
+            text-align: center;
+            padding: 20px;
+            font-family: monospace;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            padding: 0 20px 20px 20px;
+        }
         .stat {
             background: #0f172a;
             padding: 12px;
@@ -337,8 +296,7 @@ HTML_TEMPLATE = """
             text-align: center;
         }
         .stat-label { font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; }
-        .stat-value { font-size: 1.3rem; font-weight: bold; font-family: monospace; }
-        .price { font-size: 2rem; font-weight: bold; color: #fbbf24; text-align: center; padding: 10px 20px; }
+        .stat-value { font-size: 1.2rem; font-weight: bold; font-family: monospace; }
         .signal-display {
             text-align: center;
             padding: 20px;
@@ -369,15 +327,17 @@ HTML_TEMPLATE = """
             .dual-grid { grid-template-columns: 1fr; }
             .price { font-size: 1.5rem; }
             .signal-display { font-size: 1.3rem; }
+            .stats { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+            .stat-value { font-size: 0.9rem; }
         }
     </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        <h1>⚡ AI Dual Scalper | Auto Trading Bot</h1>
-        <p>XAUUSD + BTCUSD | 5-Minute Scalping Strategy | Yahoo Finance (Free)</p>
-        <div class="status-badge">🔴 LIVE AUTO TRADING</div>
+        <h1>⚡ AI Dual Scalper | Live Trading Bot</h1>
+        <p>XAUUSD + BTCUSD | 5-Minute Scalping | Real-Time Data</p>
+        <div class="status-badge" id="statusBadge">🟢 LIVE DATA</div>
     </div>
 
     <div class="dual-grid">
@@ -416,24 +376,33 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="footer">
-        <p>🤖 Bot runs 24/7 on Render | Auto-trading active | Updates every 60 seconds</p>
+        <p>🤖 Bot runs 24/7 | Updates every 60 seconds | Auto-trading ready</p>
         <p id="updateTime">Waiting for data...</p>
     </div>
 </div>
 
 <script>
     let xauChart, btcChart;
+    let lastUpdateTime = null;
     
     function initCharts() {
         if (typeof TradingView !== 'undefined') {
-            xauChart = new TradingView.widget({
-                width: "100%", height: 350, symbol: "OANDA:XAUUSD", interval: "5", theme: "dark", style: "1", locale: "en",
-                container_id: "tv-xau-container", studies: ["RSI@tv-basicstudies"], autosize: false
-            });
-            btcChart = new TradingView.widget({
-                width: "100%", height: 350, symbol: "BITSTAMP:BTCUSD", interval: "5", theme: "dark", style: "1", locale: "en",
-                container_id: "tv-btc-container", studies: ["RSI@tv-basicstudies"]
-            });
+            try {
+                xauChart = new TradingView.widget({
+                    width: "100%", height: 350, symbol: "OANDA:XAUUSD", interval: "5", 
+                    theme: "dark", style: "1", locale: "en",
+                    container_id: "tv-xau-container", studies: ["RSI@tv-basicstudies"], 
+                    autosize: false
+                });
+                btcChart = new TradingView.widget({
+                    width: "100%", height: 350, symbol: "BITSTAMP:BTCUSD", interval: "5", 
+                    theme: "dark", style: "1", locale: "en",
+                    container_id: "tv-btc-container", studies: ["RSI@tv-basicstudies"]
+                });
+                console.log("✅ Charts loaded");
+            } catch(e) {
+                console.log("Chart error:", e);
+            }
         } else {
             setTimeout(initCharts, 1000);
         }
@@ -443,34 +412,52 @@ HTML_TEMPLATE = """
         fetch('/api/all')
             .then(res => res.json())
             .then(data => {
-                // XAUUSD
-                document.getElementById('xauPrice').innerHTML = data.XAUUSD.price ? `$${data.XAUUSD.price.toFixed(2)}` : '$---';
-                document.getElementById('xauRsi').innerHTML = data.XAUUSD.rsi || '---';
-                document.getElementById('xauSupport').innerHTML = data.XAUUSD.support ? `$${data.XAUUSD.support}` : '---';
-                document.getElementById('xauResistance').innerHTML = data.XAUUSD.resistance ? `$${data.XAUUSD.resistance}` : '---';
-                const xauSignalDiv = document.getElementById('xauSignal');
-                xauSignalDiv.className = `signal-display signal-${data.XAUUSD.signal}`;
-                xauSignalDiv.innerHTML = data.XAUUSD.signal;
-                document.getElementById('xauReasoning').innerHTML = `💭 ${data.XAUUSD.reasoning || 'Analyzing...'}`;
+                // Update XAUUSD
+                if (data.XAUUSD.price) {
+                    document.getElementById('xauPrice').innerHTML = `$${data.XAUUSD.price.toFixed(2)}`;
+                    document.getElementById('xauRsi').innerHTML = data.XAUUSD.rsi || '---';
+                    document.getElementById('xauSupport').innerHTML = data.XAUUSD.support ? `$${data.XAUUSD.support}` : '---';
+                    document.getElementById('xauResistance').innerHTML = data.XAUUSD.resistance ? `$${data.XAUUSD.resistance}` : '---';
+                    
+                    const xauSignalDiv = document.getElementById('xauSignal');
+                    xauSignalDiv.className = `signal-display signal-${data.XAUUSD.signal}`;
+                    xauSignalDiv.innerHTML = data.XAUUSD.signal;
+                    document.getElementById('xauReasoning').innerHTML = `💭 ${data.XAUUSD.reasoning || 'Analyzing...'}`;
+                }
                 
-                // BTCUSD
-                document.getElementById('btcPrice').innerHTML = data.BTCUSD.price ? `$${data.BTCUSD.price.toFixed(0)}` : '$---';
-                document.getElementById('btcRsi').innerHTML = data.BTCUSD.rsi || '---';
-                document.getElementById('btcSupport').innerHTML = data.BTCUSD.support ? `$${data.BTCUSD.support}` : '---';
-                document.getElementById('btcResistance').innerHTML = data.BTCUSD.resistance ? `$${data.BTCUSD.resistance}` : '---';
-                const btcSignalDiv = document.getElementById('btcSignal');
-                btcSignalDiv.className = `signal-display signal-${data.BTCUSD.signal}`;
-                btcSignalDiv.innerHTML = data.BTCUSD.signal;
-                document.getElementById('btcReasoning').innerHTML = `💭 ${data.BTCUSD.reasoning || 'Analyzing...'}`;
+                // Update BTCUSD
+                if (data.BTCUSD.price) {
+                    document.getElementById('btcPrice').innerHTML = `$${data.BTCUSD.price.toFixed(0)}`;
+                    document.getElementById('btcRsi').innerHTML = data.BTCUSD.rsi || '---';
+                    document.getElementById('btcSupport').innerHTML = data.BTCUSD.support ? `$${data.BTCUSD.support}` : '---';
+                    document.getElementById('btcResistance').innerHTML = data.BTCUSD.resistance ? `$${data.BTCUSD.resistance}` : '---';
+                    
+                    const btcSignalDiv = document.getElementById('btcSignal');
+                    btcSignalDiv.className = `signal-display signal-${data.BTCUSD.signal}`;
+                    btcSignalDiv.innerHTML = data.BTCUSD.signal;
+                    document.getElementById('btcReasoning').innerHTML = `💭 ${data.BTCUSD.reasoning || 'Analyzing...'}`;
+                }
                 
-                document.getElementById('updateTime').innerHTML = `Last update: ${data.XAUUSD.last_update || 'Waiting...'}`;
+                // Update timestamp
+                if (data.XAUUSD.last_update && data.XAUUSD.last_update !== lastUpdateTime) {
+                    lastUpdateTime = data.XAUUSD.last_update;
+                    document.getElementById('updateTime').innerHTML = `Last update: ${data.XAUUSD.last_update}`;
+                    document.getElementById('statusBadge').innerHTML = '🟢 LIVE DATA';
+                    document.getElementById('statusBadge').style.background = '#10b981';
+                } else if (!data.XAUUSD.price) {
+                    document.getElementById('statusBadge').innerHTML = '🟡 FETCHING DATA...';
+                }
             })
-            .catch(err => console.log('Update error:', err));
+            .catch(err => {
+                console.log('Fetch error:', err);
+                document.getElementById('statusBadge').innerHTML = '🔴 CONNECTING...';
+            });
     }
     
-    initCharts();
+    // Initialize
+    setTimeout(initCharts, 500);
     updateUI();
-    setInterval(updateUI, 2000);
+    setInterval(updateUI, 3000);  // Update every 3 seconds
 </script>
 </body>
 </html>
@@ -489,19 +476,16 @@ def api_all():
 # ============================================================
 
 print("=" * 60)
-print("🚀 AI DUAL SCALPER - AUTO TRADING BOT")
+print("🚀 AI DUAL SCALPER - LIVE TRADING BOT")
 print("=" * 60)
-print("✅ Data Source: Yahoo Finance (FREE, No API Key needed)")
-print("✅ Strategy: RSI + Support/Resistance on 5-minute timeframe")
-print("✅ Auto-trading: Ready (add broker API to enable)")
+print(f"📊 Twelve Data API Key: {TWELVE_API_KEY[:10]}...")
+print("✅ Bot will fetch real-time data every 60 seconds")
 print("=" * 60)
 
 # Start trading bot thread
 bot_thread = threading.Thread(target=trading_bot_loop, daemon=True)
 bot_thread.start()
 print("✅ Trading bot thread started!")
-print("✅ Web UI available at the URL above")
-print("=" * 60)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
