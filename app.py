@@ -1,4 +1,3 @@
-
 import requests
 import time
 import json
@@ -10,13 +9,13 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURATION - GET API KEYS FROM RENDER ENVIRONMENT
+# CONFIGURATION - PUT YOUR API KEYS DIRECTLY HERE
 # ============================================================
-GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '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')
-TWELVE_API_KEY = os.environ.get('TWELVE_API_KEY', '9663744f36eb47da84d6ddd016afaace')
-FXCM_TOKEN = os.environ.get('FXCM_TOKEN', '')  # Add your FXCM token
+# IMPORTANT: Replace these with your actual keys!
+GROQ_API_KEY = "gsk_inI4X1nm01tkaXEcjJ0GWGdyb3FYWnllwn7anFXMDF4n9lITR0u4hF"
+TWELVE_API_KEY = "9663744f36eb47da84d6ddd016afaaace"
 
-# Global data storage for both assets
+# Global data storage
 assets_data = {
     'XAUUSD': {
         'price': None,
@@ -25,16 +24,10 @@ assets_data = {
         'resistance': None,
         'signal': 'WAITING',
         'confidence': 'Low',
-        'entry': None,
+        'position': None,
         'take_profit': None,
         'stop_loss': None,
-        'trailing_stop': None,
         'reasoning': 'Awaiting first analysis...',
-        'position': None,  # 'long', 'short', or None
-        'position_entry_price': None,
-        'position_entry_time': None,
-        'highest_price': None,  # For trailing stop on long
-        'lowest_price': None,   # For trailing stop on short
         'last_update': 'Never'
     },
     'BTCUSD': {
@@ -44,114 +37,110 @@ assets_data = {
         'resistance': None,
         'signal': 'WAITING',
         'confidence': 'Low',
-        'entry': None,
+        'position': None,
         'take_profit': None,
         'stop_loss': None,
-        'trailing_stop': None,
         'reasoning': 'Awaiting first analysis...',
-        'position': None,
-        'position_entry_price': None,
-        'position_entry_time': None,
-        'highest_price': None,
-        'lowest_price': None,
         'last_update': 'Never'
     }
 }
 
 # ============================================================
-# TECHNICAL ANALYSIS FUNCTIONS
+# SIMPLE MARKET DATA FUNCTIONS
 # ============================================================
-def calculate_rsi(prices, period=14):
-    """Calculate RSI from price list"""
-    if len(prices) < period + 1:
-        return 50
-    gains = 0
-    losses = 0
-    for i in range(len(prices) - period - 1, len(prices) - 1):
-        diff = prices[i+1] - prices[i]
-        if diff >= 0:
-            gains += diff
-        else:
-            losses -= diff
-    avg_gain = gains / period
-    avg_loss = losses / period
-    if avg_loss == 0:
-        return 75
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi, 1)
 
-def calculate_support_resistance(prices):
-    """Calculate dynamic support and resistance using recent highs/lows"""
-    if len(prices) < 20:
-        return None, None
-    recent = prices[-30:]
-    high = max(recent)
-    low = min(recent)
-    range_val = high - low
-    support = low + (range_val * 0.236)
-    resistance = high - (range_val * 0.236)
-    return round(support, 2), round(resistance, 2)
-
-def is_near_support(price, support, asset):
-    """Check if price is near support level"""
-    if not support or not price:
-        return False
-    threshold = 1.8 if asset == 'XAUUSD' else 250
-    return abs(price - support) < threshold
-
-def is_near_resistance(price, resistance, asset):
-    """Check if price is near resistance level"""
-    if not resistance or not price:
-        return False
-    threshold = 1.8 if asset == 'XAUUSD' else 250
-    return abs(price - resistance) < threshold
-
-# ============================================================
-# MARKET DATA FUNCTIONS (Twelve Data)
-# ============================================================
-def get_market_data(symbol, asset_key):
-    """Fetch real market data from Twelve Data"""
+def get_single_price(symbol):
+    """Get current price only - simpler API call"""
     try:
-        # Map symbol for Twelve Data API
+        # Map symbol for Twelve Data
         api_symbol = 'XAU/USD' if symbol == 'XAUUSD' else 'BTC/USD'
-        url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval=5min&outputsize=50&apikey={TWELVE_API_KEY}"
+        url = f"https://api.twelvedata.com/price?symbol={api_symbol}&apikey={TWELVE_API_KEY}"
+        print(f"Fetching {symbol} from: {url}")
+        
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        print(f"Response for {symbol}: {data}")
+        
+        if 'price' in data:
+            return float(data['price'])
+        else:
+            print(f"Error for {symbol}: {data.get('message', 'Unknown error')}")
+            return None
+    except Exception as e:
+        print(f"Price error for {symbol}: {e}")
+        return None
+
+def get_full_market_data(symbol):
+    """Get time series for RSI calculation"""
+    try:
+        api_symbol = 'XAU/USD' if symbol == 'XAUUSD' else 'BTC/USD'
+        url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval=5min&outputsize=30&apikey={TWELVE_API_KEY}"
+        
         response = requests.get(url, timeout=10)
         data = response.json()
         
         if 'values' not in data or not data['values']:
-            print(f"No values for {symbol}")
+            print(f"No time series for {symbol}")
             return None
         
         prices = [float(v['close']) for v in data['values']]
+        
+        if not prices:
+            return None
+            
         current_price = prices[-1]
-        rsi = calculate_rsi(prices)
-        support, resistance = calculate_support_resistance(prices)
+        
+        # Calculate RSI
+        rsi = 50
+        if len(prices) >= 15:
+            gains = 0
+            losses = 0
+            for i in range(len(prices)-15, len(prices)-1):
+                diff = prices[i+1] - prices[i]
+                if diff >= 0:
+                    gains += diff
+                else:
+                    losses -= diff
+            avg_gain = gains / 14
+            avg_loss = losses / 14
+            if avg_loss > 0:
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+                rsi = round(rsi, 1)
+        
+        # Calculate support/resistance (simple version)
+        recent = prices[-20:]
+        high = max(recent)
+        low = min(recent)
+        range_val = high - low
+        support = round(low + (range_val * 0.236), 2)
+        resistance = round(high - (range_val * 0.236), 2)
         
         return {
             'price': current_price,
             'rsi': rsi,
             'support': support,
             'resistance': resistance,
-            'history': prices
+            'prices': prices
         }
     except Exception as e:
         print(f"Market data error for {symbol}: {e}")
         return None
 
 # ============================================================
-# AI SIGNAL FUNCTION (Groq)
+# SIMPLE AI SIGNAL (No complex prompting)
 # ============================================================
+
 def get_ai_signal(asset_key, market_data):
     """Get trading signal from Groq AI"""
-    if not GROQ_API_KEY:
+    if not GROQ_API_KEY or GROQ_API_KEY == "gsk_":
         return {
             'signal': 'HOLD',
             'confidence': 'Low',
-            'entry': market_data['price'],
-            'takeProfit': market_data['price'] + (2 if asset_key == 'XAUUSD' else 300),
-            'stopLoss': market_data['price'] - (2 if asset_key == 'XAUUSD' else 300),
-            'reasoning': 'Groq API key not configured. Add GROQ_API_KEY in Render environment variables.'
+            'take_profit': market_data['price'] * 1.005 if asset_key == 'XAUUSD' else market_data['price'] * 1.01,
+            'stop_loss': market_data['price'] * 0.995 if asset_key == 'XAUUSD' else market_data['price'] * 0.99,
+            'reasoning': 'Groq API key not configured'
         }
     
     price = market_data['price']
@@ -159,46 +148,24 @@ def get_ai_signal(asset_key, market_data):
     support = market_data['support']
     resistance = market_data['resistance']
     
-    near_support = is_near_support(price, support, asset_key)
-    near_resistance = is_near_resistance(price, resistance, asset_key)
+    # Simple rule-based logic first (fallback)
+    signal = 'HOLD'
+    reasoning = ''
     
-    # Check current position for profit protection advice
-    position = assets_data[asset_key].get('position')
-    position_entry = assets_data[asset_key].get('position_entry_price')
+    if rsi < 35 and price <= support * 1.005:
+        signal = 'BUY'
+        reasoning = f'RSI oversold ({rsi}) and price near support (${support})'
+    elif rsi > 65 and price >= resistance * 0.995:
+        signal = 'SELL'
+        reasoning = f'RSI overbought ({rsi}) and price near resistance (${resistance})'
+    else:
+        reasoning = f'RSI at {rsi} - waiting for setup near support/resistance'
     
-    profit_status = ""
-    if position == 'long' and position_entry:
-        profit_pct = ((price - position_entry) / position_entry) * 100
-        profit_status = f"Currently in LONG position entered at ${position_entry:.2f}. Current profit: {profit_pct:.2f}%. "
-        if profit_pct > 0.5:
-            profit_status += "Consider trailing stop to protect profits."
-    elif position == 'short' and position_entry:
-        profit_pct = ((position_entry - price) / position_entry) * 100
-        profit_status = f"Currently in SHORT position entered at ${position_entry:.2f}. Current profit: {profit_pct:.2f}%. "
-        if profit_pct > 0.5:
-            profit_status += "Consider trailing stop to protect profits."
-    
-    prompt = f"""You are a professional scalper for {asset_key}. Analyze this REAL 5-minute market data:
-
-Price: ${price:.2f}
-RSI (14): {rsi} ({'Overbought (>70)' if rsi > 70 else 'Oversold (<30)' if rsi < 30 else 'Neutral'})
-Dynamic Support: ${support if support else 'N/A'}
-Dynamic Resistance: ${resistance if resistance else 'N/A'}
-Price Action: {'NEAR SUPPORT (BUY ZONE)' if near_support else 'NEAR RESISTANCE (SELL ZONE)' if near_resistance else 'Between levels'}
-{profit_status}
-
-Scalping Strategy Rules (5-minute timeframe):
-- BUY when: Price near Support AND RSI < 35 (oversold)
-- SELL when: Price near Resistance AND RSI > 65 (overbought)
-- HOLD when: No clear setup OR RSI is neutral (40-60)
-- If in a profitable position, recommend trailing stop to lock profits
-
-Return ONLY valid JSON with this exact format:
-{{"signal": "BUY/SELL/HOLD/CLOSE", "confidence": "High/Medium/Low", "entry": number, "takeProfit": number, "stopLoss": number, "trailingStopPct": number, "reasoning": "short reason"}}
-
-For trailingStopPct: set 0.5 for XAUUSD (0.5% trail) or 1.0 for BTCUSD (1% trail) if in profit, otherwise 0."""
-
+    # Try Groq for better analysis
     try:
+        prompt = f"""XAUUSD price: ${price}, RSI: {rsi}, Support: ${support}, Resistance: ${resistance}. 
+        Reply with JSON only: {{"signal":"BUY/SELL/HOLD", "reason":"short"}}"""
+        
         headers = {
             "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json"
@@ -206,599 +173,204 @@ For trailingStopPct: set 0.5 for XAUUSD (0.5% trail) or 1.0 for BTCUSD (1% trail
         data = {
             "model": "llama-3.3-70b-versatile",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
-            "max_tokens": 350
+            "max_tokens": 100
         }
         
         response = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers=headers,
             json=data,
-            timeout=15
+            timeout=10
         )
         
-        result = response.json()
-        content = result['choices'][0]['message']['content']
-        content = content.replace('```json', '').replace('```', '').strip()
-        
-        return json.loads(content)
+        if response.status_code == 200:
+            result = response.json()
+            content = result['choices'][0]['message']['content']
+            # Try to parse JSON response
+            import re
+            json_match = re.search(r'\{.*\}', content)
+            if json_match:
+                groq_result = json.loads(json_match.group())
+                if groq_result.get('signal') in ['BUY', 'SELL', 'HOLD']:
+                    signal = groq_result.get('signal')
+                    reasoning = groq_result.get('reason', reasoning)
     except Exception as e:
-        print(f"Groq error for {asset_key}: {e}")
-        return {
-            'signal': 'HOLD',
-            'confidence': 'Low',
-            'entry': market_data['price'],
-            'takeProfit': market_data['price'] + (2 if asset_key == 'XAUUSD' else 300),
-            'stopLoss': market_data['price'] - (2 if asset_key == 'XAUUSD' else 300),
-            'trailingStopPct': 0,
-            'reasoning': f'AI analysis temporary issue: {str(e)[:50]}'
-        }
+        print(f"Groq error: {e}")
+    
+    # Set TP/SL based on signal
+    if signal == 'BUY':
+        tp = price * (1.005 if asset_key == 'XAUUSD' else 1.01)
+        sl = price * (0.995 if asset_key == 'XAUUSD' else 0.99)
+    elif signal == 'SELL':
+        tp = price * (0.995 if asset_key == 'XAUUSD' else 0.99)
+        sl = price * (1.005 if asset_key == 'XAUUSD' else 1.01)
+    else:
+        tp = price
+        sl = price
+    
+    return {
+        'signal': signal,
+        'confidence': 'Medium',
+        'take_profit': round(tp, 2),
+        'stop_loss': round(sl, 2),
+        'reasoning': reasoning
+    }
 
 # ============================================================
-# PROFIT PROTECTION (TRAILING STOP)
+# TRADING BOT LOOP
 # ============================================================
-def update_trailing_stop(asset_key, current_price, asset_data):
-    """Update trailing stop to protect profits"""
-    position = asset_data['position']
-    entry_price = asset_data['position_entry_price']
-    highest = asset_data.get('highest_price', entry_price)
-    lowest = asset_data.get('lowest_price', entry_price)
-    trailing_pct = asset_data.get('trailing_stop', 0)
-    
-    if not position or not entry_price:
-        return None
-    
-    if position == 'long':
-        # Update highest price seen
-        if current_price > highest:
-            highest = current_price
-            asset_data['highest_price'] = highest
-            
-            # Calculate new trailing stop
-            if trailing_pct > 0:
-                new_trailing_stop = highest * (1 - trailing_pct / 100)
-                # Only move stop UP (never down)
-                if new_trailing_stop > asset_data['stop_loss']:
-                    asset_data['stop_loss'] = new_trailing_stop
-                    print(f"📈 {asset_key} Trailing stop moved up to ${new_trailing_stop:.2f}")
-        
-        # Check if trailing stop hit
-        if current_price <= asset_data['stop_loss']:
-            return 'CLOSE'
-            
-    elif position == 'short':
-        # Update lowest price seen
-        if current_price < lowest:
-            lowest = current_price
-            asset_data['lowest_price'] = lowest
-            
-            # Calculate new trailing stop
-            if trailing_pct > 0:
-                new_trailing_stop = lowest * (1 + trailing_pct / 100)
-                # Only move stop DOWN (never up for shorts)
-                if new_trailing_stop < asset_data['stop_loss']:
-                    asset_data['stop_loss'] = new_trailing_stop
-                    print(f"📉 {asset_key} Trailing stop moved down to ${new_trailing_stop:.2f}")
-        
-        # Check if trailing stop hit
-        if current_price >= asset_data['stop_loss']:
-            return 'CLOSE'
-    
-    return None
 
-# ============================================================
-# TRADING EXECUTION
-# ============================================================
-def execute_trade(asset_key, signal, data, market_price):
-    """Execute or manage trades with profit protection"""
-    asset = assets_data[asset_key]
-    
-    if signal == 'BUY' and asset['position'] is None:
-        # Open new LONG position
-        asset['position'] = 'long'
-        asset['position_entry_price'] = market_price
-        asset['position_entry_time'] = datetime.now().isoformat()
-        asset['highest_price'] = market_price
-        asset['stop_loss'] = data['stopLoss']
-        asset['take_profit'] = data['takeProfit']
-        asset['trailing_stop'] = data.get('trailingStopPct', 0)
-        
-        print(f"🟢 OPEN LONG {asset_key} @ ${market_price:.2f}")
-        print(f"   TP: ${asset['take_profit']:.2f} | SL: ${asset['stop_loss']:.2f}")
-        print(f"   Trail: {asset['trailing_stop']}%")
-        
-        # === ADD YOUR FXCM ORDER CODE HERE ===
-        # if FXCM_TOKEN:
-        #     send_order(asset_key, 'buy', market_price)
-        
-    elif signal == 'SELL' and asset['position'] is None:
-        # Open new SHORT position
-        asset['position'] = 'short'
-        asset['position_entry_price'] = market_price
-        asset['position_entry_time'] = datetime.now().isoformat()
-        asset['lowest_price'] = market_price
-        asset['stop_loss'] = data['stopLoss']
-        asset['take_profit'] = data['takeProfit']
-        asset['trailing_stop'] = data.get('trailingStopPct', 0)
-        
-        print(f"🔴 OPEN SHORT {asset_key} @ ${market_price:.2f}")
-        print(f"   TP: ${asset['take_profit']:.2f} | SL: ${asset['stop_loss']:.2f}")
-        print(f"   Trail: {asset['trailing_stop']}%")
-        
-        # === ADD YOUR FXCM ORDER CODE HERE ===
-        
-    elif signal == 'CLOSE' and asset['position'] is not None:
-        # Close position (profit target hit or trailing stop triggered)
-        profit = 0
-        if asset['position'] == 'long':
-            profit = market_price - asset['position_entry_price']
-            print(f"🔒 CLOSE LONG {asset_key} @ ${market_price:.2f} | Profit: ${profit:.2f}")
-        else:
-            profit = asset['position_entry_price'] - market_price
-            print(f"🔒 CLOSE SHORT {asset_key} @ ${market_price:.2f} | Profit: ${profit:.2f}")
-        
-        # Reset position
-        asset['position'] = None
-        asset['position_entry_price'] = None
-        asset['highest_price'] = None
-        asset['lowest_price'] = None
-        
-        # === ADD YOUR FXCM CLOSE ORDER CODE HERE ===
-
-# ============================================================
-# CHECK PROFIT TARGETS
-# ============================================================
-def check_profit_targets(asset_key, current_price, asset_data):
-    """Check if take profit or stop loss hit"""
-    if asset_data['position'] == 'long':
-        if current_price >= asset_data['take_profit']:
-            return 'CLOSE'  # Take profit hit
-        elif current_price <= asset_data['stop_loss']:
-            return 'CLOSE'  # Stop loss hit
-    elif asset_data['position'] == 'short':
-        if current_price <= asset_data['take_profit']:
-            return 'CLOSE'  # Take profit hit
-        elif current_price >= asset_data['stop_loss']:
-            return 'CLOSE'  # Stop loss hit
-    return None
-
-# ============================================================
-# MAIN TRADING LOOP
-# ============================================================
 def trading_bot_loop():
-    """Main trading loop running in background for both assets"""
-    print("🤖 Dual-Asset Trading Bot Started!")
-    print(f"📊 Trading: XAUUSD + BTCUSD")
-    print(f"⏱️  Timeframe: 5-minute candles")
-    print("=" * 50)
+    """Main trading loop"""
+    print("🤖 Trading Bot Started!")
+    print(f"Twelve Data Key: {TWELVE_API_KEY[:10]}...")
+    print(f"Groq Key: {GROQ_API_KEY[:15]}...")
     
     while True:
         for asset_key in ['XAUUSD', 'BTCUSD']:
             try:
-                # Fetch market data
-                market_data = get_market_data(asset_key, asset_key)
+                print(f"\n--- Fetching {asset_key} ---")
+                
+                # Get market data
+                market_data = get_full_market_data(asset_key)
                 
                 if market_data and market_data['price']:
                     current_price = market_data['price']
+                    print(f"✅ {asset_key} Price: ${current_price:.2f}")
+                    print(f"   RSI: {market_data['rsi']}, Support: ${market_data['support']}, Resistance: ${market_data['resistance']}")
                     
-                    # Check if current position hit profit target
-                    close_signal = check_profit_targets(asset_key, current_price, assets_data[asset_key])
-                    
-                    if close_signal:
-                        execute_trade(asset_key, 'CLOSE', None, current_price)
-                    
-                    # Update trailing stop for existing positions
-                    if assets_data[asset_key]['position'] is not None:
-                        trail_close = update_trailing_stop(asset_key, current_price, assets_data[asset_key])
-                        if trail_close == 'CLOSE':
-                            execute_trade(asset_key, 'CLOSE', None, current_price)
-                    
-                    # Get AI signal for new trades
+                    # Get AI signal
                     analysis = get_ai_signal(asset_key, market_data)
+                    print(f"   Signal: {analysis['signal']} - {analysis['reasoning']}")
                     
-                    # Only take new signals if no position open
-                    if assets_data[asset_key]['position'] is None:
-                        if analysis.get('signal') in ['BUY', 'SELL']:
-                            execute_trade(asset_key, analysis['signal'], analysis, current_price)
-                    
-                    # Update global data for web display
-                    assets_data[asset_key].update({
+                    # Update global data
+                    assets_data[asset_key] = {
                         'price': current_price,
                         'rsi': market_data['rsi'],
                         'support': market_data['support'],
                         'resistance': market_data['resistance'],
-                        'signal': analysis.get('signal', 'HOLD'),
-                        'confidence': analysis.get('confidence', 'Medium'),
-                        'entry': analysis.get('entry', current_price),
-                        'take_profit': analysis.get('takeProfit', current_price + (2 if asset_key == 'XAUUSD' else 300)),
-                        'stop_loss': analysis.get('stopLoss', current_price - (2 if asset_key == 'XAUUSD' else 300)),
-                        'trailing_stop': analysis.get('trailingStopPct', 0),
-                        'reasoning': analysis.get('reasoning', 'Analysis complete'),
+                        'signal': analysis['signal'],
+                        'confidence': analysis['confidence'],
+                        'position': assets_data[asset_key].get('position'),
+                        'take_profit': analysis['take_profit'],
+                        'stop_loss': analysis['stop_loss'],
+                        'reasoning': analysis['reasoning'],
                         'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    })
-                    
-                    print(f"[{assets_data[asset_key]['last_update']}] {asset_key}: ${current_price:.2f} | RSI: {market_data['rsi']} | Signal: {analysis.get('signal')} | Pos: {assets_data[asset_key]['position']}")
-                    
+                    }
                 else:
-                    print(f"⚠️ No market data for {asset_key}")
+                    print(f"❌ No market data for {asset_key}")
+                    assets_data[asset_key]['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 
-                # Small delay between assets to avoid rate limiting
-                time.sleep(2)
+                time.sleep(3)  # Small delay between assets
                 
             except Exception as e:
                 print(f"Error in {asset_key} loop: {e}")
         
-        # Wait 60 seconds before next full cycle (5-minute trading frequency)
+        # Wait 60 seconds before next cycle
+        print(f"\n⏳ Waiting 60 seconds... Next update at {datetime.now().strftime('%H:%M:%S')}")
         time.sleep(60)
 
 # ============================================================
-# FLASK WEB DASHBOARD WITH TRADINGVIEW CHARTS
+# WEB DASHBOARD
 # ============================================================
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🤖 AI Dual Scalper | XAUUSD + BTCUSD | Automated Trading</title>
-    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <title>🤖 AI Dual Scalper</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            font-family: system-ui, -apple-system, sans-serif;
             background: linear-gradient(135deg, #0a0f1a 0%, #0f172a 100%);
             color: #eef2ff;
             padding: 20px;
-            min-height: 100vh;
         }
-        .container {
-            max-width: 1800px;
-            margin: 0 auto;
-        }
+        .container { max-width: 1400px; margin: 0 auto; }
         .header {
             background: rgba(17, 24, 39, 0.8);
-            backdrop-filter: blur(10px);
             border-radius: 28px;
-            padding: 20px 28px;
+            padding: 20px;
             margin-bottom: 24px;
             border: 1px solid #1e293b;
         }
-        .header h1 {
-            font-size: 1.8rem;
-            background: linear-gradient(135deg, #fbbf24, #f59e0b);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-        }
-        .header p {
-            color: #94a3b8;
-            font-size: 0.85rem;
-        }
-        .dual-asset-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px;
-            margin-bottom: 24px;
-        }
-        .asset-panel {
+        .header h1 { font-size: 1.5rem; color: #fbbf24; }
+        .dual-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+        .card {
             background: rgba(17, 24, 39, 0.8);
-            backdrop-filter: blur(10px);
             border-radius: 24px;
+            padding: 20px;
             border: 1px solid #1e293b;
-            overflow: hidden;
         }
-        .asset-header {
-            background: #111827;
-            padding: 16px 20px;
-            font-weight: 700;
-            font-size: 1.2rem;
-            border-bottom: 1px solid #1e293b;
-        }
-        .asset-header .symbol {
-            color: #fbbf24;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
+        .card h2 { color: #fbbf24; margin-bottom: 16px; }
+        .price { font-size: 2.5rem; font-weight: bold; font-family: monospace; color: #fbbf24; }
+        .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
+        .stat { background: #0f172a; padding: 10px; border-radius: 12px; text-align: center; }
+        .stat-label { font-size: 0.7rem; color: #9ca3af; }
+        .stat-value { font-size: 1.2rem; font-weight: bold; }
+        .signal {
+            text-align: center;
             padding: 16px;
-        }
-        .stat-card {
-            background: #0f172a;
             border-radius: 16px;
-            padding: 12px;
-            text-align: center;
-        }
-        .stat-label {
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            color: #9ca3af;
-        }
-        .stat-value {
-            font-size: 1.3rem;
-            font-weight: 700;
-            font-family: monospace;
-        }
-        .chart-container {
-            width: 100%;
-            height: 350px;
-            padding: 12px;
-        }
-        .signal-box {
-            padding: 16px;
-            margin: 12px;
-            border-radius: 20px;
-        }
-        .signal-BUY {
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05));
-            border: 1px solid #10b981;
-        }
-        .signal-SELL {
-            background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.05));
-            border: 1px solid #ef4444;
-        }
-        .signal-HOLD {
-            background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.05));
-            border: 1px solid #f59e0b;
-        }
-        .signal-text {
+            margin: 16px 0;
             font-size: 1.8rem;
-            font-weight: 800;
+            font-weight: bold;
         }
-        .signal-BUY .signal-text { color: #10b981; }
-        .signal-SELL .signal-text { color: #ef4444; }
-        .signal-HOLD .signal-text { color: #f59e0b; }
-        .position-badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-        }
-        .position-long {
-            background: rgba(16, 185, 129, 0.2);
-            color: #10b981;
-            border: 1px solid #10b981;
-        }
-        .position-short {
-            background: rgba(239, 68, 68, 0.2);
-            color: #ef4444;
-            border: 1px solid #ef4444;
-        }
-        .reasoning {
-            font-size: 0.8rem;
-            color: #cbd5e1;
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid #1e293b;
-        }
-        .last-update {
-            font-size: 0.7rem;
-            color: #64748b;
-            text-align: center;
-            margin-top: 16px;
-        }
-        @media (max-width: 1100px) {
-            .dual-asset-grid {
-                grid-template-columns: 1fr;
-            }
-        }
+        .signal-BUY { background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #10b981; }
+        .signal-SELL { background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; }
+        .signal-HOLD { background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; color: #f59e0b; }
+        .reasoning { font-size: 0.8rem; color: #cbd5e1; margin-top: 12px; padding-top: 12px; border-top: 1px solid #1e293b; }
+        .footer { text-align: center; margin-top: 24px; font-size: 0.7rem; color: #64748b; }
+        @media (max-width: 768px) { .dual-grid { grid-template-columns: 1fr; } .price { font-size: 1.8rem; } }
     </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        <h1>⚡ AI Dual Scalper | XAUUSD + BTCUSD</h1>
-        <p>Real Market Data (5-min) • Groq AI Analysis • Trailing Stop Profit Protection • TradingView Charts</p>
+        <h1>⚡ AI Dual Scalper</h1>
+        <p>XAUUSD + BTCUSD | Real Market Data | Groq AI Analysis | 5-Min Timeframe</p>
     </div>
 
-    <div class="dual-asset-grid">
-        <!-- XAUUSD Panel -->
-        <div class="asset-panel">
-            <div class="asset-header">🥇 <span class="symbol">XAUUSD (Gold)</span> - 5-Min Scalping</div>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Price</div>
-                    <div class="stat-value" id="xauPrice">$---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Support</div>
-                    <div class="stat-value" id="xauSupport">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Resistance</div>
-                    <div class="stat-value" id="xauResistance">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">RSI (14)</div>
-                    <div class="stat-value" id="xauRsi">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Position</div>
-                    <div class="stat-value" id="xauPosition">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Trail Stop</div>
-                    <div class="stat-value" id="xauTrail">---</div>
-                </div>
+    <div class="dual-grid">
+        <!-- XAUUSD -->
+        <div class="card">
+            <h2>🥇 XAUUSD (Gold)</h2>
+            <div class="price">${{ "%.2f"|format(xau.price) if xau.price else '---' }}</div>
+            <div class="stats">
+                <div class="stat"><div class="stat-label">RSI (14)</div><div class="stat-value">{{ xau.rsi if xau.rsi else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">Support</div><div class="stat-value">${{ "%.2f"|format(xau.support) if xau.support else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value">${{ "%.2f"|format(xau.resistance) if xau.resistance else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">Position</div><div class="stat-value">{{ xau.position if xau.position else 'NONE' }}</div></div>
             </div>
-            <div class="chart-container" id="xauChart"></div>
-            <div id="xauSignalBox" class="signal-box signal-HOLD">
-                <div class="signal-text">---</div>
-                <div class="reasoning">Awaiting AI analysis...</div>
-            </div>
+            <div class="signal signal-{{ xau.signal }}">{{ xau.signal }}</div>
+            <div class="reasoning">💭 {{ xau.reasoning }}</div>
         </div>
 
-        <!-- BTCUSD Panel -->
-        <div class="asset-panel">
-            <div class="asset-header">₿ <span class="symbol">BTCUSD (Bitcoin)</span> - 5-Min Scalping</div>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Price</div>
-                    <div class="stat-value" id="btcPrice">$---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Support</div>
-                    <div class="stat-value" id="btcSupport">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Resistance</div>
-                    <div class="stat-value" id="btcResistance">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">RSI (14)</div>
-                    <div class="stat-value" id="btcRsi">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Position</div>
-                    <div class="stat-value" id="btcPosition">---</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Trail Stop</div>
-                    <div class="stat-value" id="btcTrail">---</div>
-                </div>
+        <!-- BTCUSD -->
+        <div class="card">
+            <h2>₿ BTCUSD (Bitcoin)</h2>
+            <div class="price">${{ "%.0f"|format(btc.price) if btc.price else '---' }}</div>
+            <div class="stats">
+                <div class="stat"><div class="stat-label">RSI (14)</div><div class="stat-value">{{ btc.rsi if btc.rsi else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">Support</div><div class="stat-value">${{ "%.0f"|format(btc.support) if btc.support else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value">${{ "%.0f"|format(btc.resistance) if btc.resistance else '---' }}</div></div>
+                <div class="stat"><div class="stat-label">Position</div><div class="stat-value">{{ btc.position if btc.position else 'NONE' }}</div></div>
             </div>
-            <div class="chart-container" id="btcChart"></div>
-            <div id="btcSignalBox" class="signal-box signal-HOLD">
-                <div class="signal-text">---</div>
-                <div class="reasoning">Awaiting AI analysis...</div>
-            </div>
+            <div class="signal signal-{{ btc.signal }}">{{ btc.signal }}</div>
+            <div class="reasoning">💭 {{ btc.reasoning }}</div>
         </div>
     </div>
 
-    <div class="last-update" id="lastUpdate">Last update: --</div>
+    <div class="footer">
+        Last update: {{ xau.last_update if xau.last_update else 'Waiting for data...' }}
+    </div>
 </div>
 
 <script>
-    let xauChart, btcChart;
-    
-    // Initialize TradingView charts
-    function initCharts() {
-        if (typeof TradingView !== 'undefined') {
-            xauChart = new TradingView.widget({
-                width: "100%",
-                height: 350,
-                symbol: "OANDA:XAUUSD",
-                interval: "5",
-                theme: "dark",
-                style: "1",
-                locale: "en",
-                container_id: "xauChart",
-                studies: ["RSI@tv-basicstudies"],
-                hide_side_toolbar: false,
-                allow_symbol_change: false
-            });
-            
-            btcChart = new TradingView.widget({
-                width: "100%",
-                height: 350,
-                symbol: "BITSTAMP:BTCUSD",
-                interval: "5",
-                theme: "dark",
-                style: "1",
-                locale: "en",
-                container_id: "btcChart",
-                studies: ["RSI@tv-basicstudies"],
-                hide_side_toolbar: false,
-                allow_symbol_change: false
-            });
-            
-            console.log("TradingView charts loaded");
-        } else {
-            console.log("Waiting for TradingView...");
-            setTimeout(initCharts, 1000);
-        }
-    }
-    
-    // Fetch and update dashboard data
-    async function updateDashboard() {
-        try {
-            const response = await fetch('/api/all');
-            const data = await response.json();
-            
-            // Update XAUUSD
-            document.getElementById('xauPrice').innerHTML = `$${data.XAUUSD.price || '---'}`;
-            document.getElementById('xauSupport').innerHTML = data.XAUUSD.support ? `$${data.XAUUSD.support}` : '---';
-            document.getElementById('xauResistance').innerHTML = data.XAUUSD.resistance ? `$${data.XAUUSD.resistance}` : '---';
-            
-            const xauRsi = document.getElementById('xauRsi');
-            xauRsi.innerHTML = data.XAUUSD.rsi || '---';
-            xauRsi.style.color = (data.XAUUSD.rsi > 70) ? '#ef4444' : (data.XAUUSD.rsi < 30) ? '#10b981' : '#fbbf24';
-            
-            const xauPosition = document.getElementById('xauPosition');
-            if (data.XAUUSD.position === 'long') {
-                xauPosition.innerHTML = '🟢 LONG';
-                xauPosition.className = 'stat-value position-long';
-            } else if (data.XAUUSD.position === 'short') {
-                xauPosition.innerHTML = '🔴 SHORT';
-                xauPosition.className = 'stat-value position-short';
-            } else {
-                xauPosition.innerHTML = '⚪ NONE';
-                xauPosition.className = 'stat-value';
-            }
-            
-            document.getElementById('xauTrail').innerHTML = data.XAUUSD.trailing_stop ? `${data.XAUUSD.trailing_stop}%` : '---';
-            
-            // Update XAUUSD signal box
-            const xauBox = document.getElementById('xauSignalBox');
-            xauBox.className = `signal-box signal-${data.XAUUSD.signal}`;
-            xauBox.innerHTML = `
-                <div class="signal-text">${data.XAUUSD.signal}</div>
-                <div class="reasoning">
-                    💭 ${data.XAUUSD.reasoning}<br>
-                    🎯 TP: $${data.XAUUSD.take_profit?.toFixed(2) || '---'} | 🛑 SL: $${data.XAUUSD.stop_loss?.toFixed(2) || '---'}
-                </div>
-            `;
-            
-            // Update BTCUSD
-            document.getElementById('btcPrice').innerHTML = `$${data.BTCUSD.price?.toFixed(0) || '---'}`;
-            document.getElementById('btcSupport').innerHTML = data.BTCUSD.support ? `$${data.BTCUSD.support.toFixed(0)}` : '---';
-            document.getElementById('btcResistance').innerHTML = data.BTCUSD.resistance ? `$${data.BTCUSD.resistance.toFixed(0)}` : '---';
-            
-            const btcRsi = document.getElementById('btcRsi');
-            btcRsi.innerHTML = data.BTCUSD.rsi || '---';
-            btcRsi.style.color = (data.BTCUSD.rsi > 70) ? '#ef4444' : (data.BTCUSD.rsi < 30) ? '#10b981' : '#fbbf24';
-            
-            const btcPosition = document.getElementById('btcPosition');
-            if (data.BTCUSD.position === 'long') {
-                btcPosition.innerHTML = '🟢 LONG';
-                btcPosition.className = 'stat-value position-long';
-            } else if (data.BTCUSD.position === 'short') {
-                btcPosition.innerHTML = '🔴 SHORT';
-                btcPosition.className = 'stat-value position-short';
-            } else {
-                btcPosition.innerHTML = '⚪ NONE';
-                btcPosition.className = 'stat-value';
-            }
-            
-            document.getElementById('btcTrail').innerHTML = data.BTCUSD.trailing_stop ? `${data.BTCUSD.trailing_stop}%` : '---';
-            
-            // Update BTCUSD signal box
-            const btcBox = document.getElementById('btcSignalBox');
-            btcBox.className = `signal-box signal-${data.BTCUSD.signal}`;
-            btcBox.innerHTML = `
-                <div class="signal-text">${data.BTCUSD.signal}</div>
-                <div class="reasoning">
-                    💭 ${data.BTCUSD.reasoning}<br>
-                    🎯 TP: $${data.BTCUSD.take_profit?.toFixed(0) || '---'} | 🛑 SL: $${data.BTCUSD.stop_loss?.toFixed(0) || '---'}
-                </div>
-            `;
-            
-            document.getElementById('lastUpdate').innerHTML = `Last update: ${data.XAUUSD.last_update || new Date().toLocaleTimeString()}`;
-            
-        } catch (error) {
-            console.log("Update error:", error);
-        }
-    }
-    
-    // Initialize everything
-    setTimeout(initCharts, 500);
-    updateDashboard();
-    setInterval(updateDashboard, 5000); // Update every 5 seconds
+    setInterval(function() { location.reload(); }, 30000);
 </script>
 </body>
 </html>
@@ -806,35 +378,29 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(HTML_TEMPLATE, 
+                                  xau=assets_data['XAUUSD'], 
+                                  btc=assets_data['BTCUSD'])
 
 @app.route('/api/all')
 def api_all():
     return jsonify(assets_data)
 
 # ============================================================
-# MAIN ENTRY POINT
+# MAIN
 # ============================================================
+
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🤖 AI DUAL SCALPER - XAUUSD + BTCUSD")
-    print("=" * 60)
-    print("✅ Features:")
-    print("   • Real-time market data (Twelve Data)")
-    print("   • 5-minute timeframe analysis")
-    print("   • Support/Resistance + RSI strategy")
-    print("   • Groq AI decision making")
-    print("   • Trailing stop profit protection")
-    print("   • TradingView charts")
-    print("=" * 60)
+    print("=" * 50)
+    print("🚀 AI Dual Scalper Starting...")
+    print("=" * 50)
     
-    # Start trading bot in background thread
+    # Start trading bot thread
     bot_thread = threading.Thread(target=trading_bot_loop, daemon=True)
     bot_thread.start()
     
     # Start web server
     port = int(os.environ.get('PORT', 5000))
-    print(f"\n🌐 Web Dashboard: https://localhost:{port}")
-    print("🚀 Bot is running in background!\n")
+    print(f"🌐 Web dashboard on port {port}")
     
     app.run(host='0.0.0.0', port=port)
