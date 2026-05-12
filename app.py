@@ -1,492 +1,499 @@
 import requests
 import time
-import json
-import os
 import threading
+import os
 from datetime import datetime
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, jsonify, render_template_string
 
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURATION - USE YOUR KEYS (they work!)
+# GLOBAL DATA STORAGE
 # ============================================================
-GROQ_API_KEY = "gsk_inI4X1nm01tkaXEcjJ0GWGdyb3FYWnllwn7anFXMDF4n9lITR0u4hF"
-TWELVE_API_KEY = "ef1b1adda82943bca544ea28b3d44751"
 
-# Global data storage
 assets_data = {
-    'XAUUSD': {
-        'price': None, 'rsi': None, 'support': None, 'resistance': None,
-        'signal': 'WAITING', 'confidence': 'Low', 'position': None,
-        'take_profit': None, 'stop_loss': None, 'reasoning': 'Awaiting first analysis...',
-        'last_update': 'Never'
-    },
-    'BTCUSD': {
-        'price': None, 'rsi': None, 'support': None, 'resistance': None,
-        'signal': 'WAITING', 'confidence': 'Low', 'position': None,
-        'take_profit': None, 'stop_loss': None, 'reasoning': 'Awaiting first analysis...',
-        'last_update': 'Never'
-    }
+    "XAUUSD": {},
+    "BTCUSD": {}
 }
 
 # ============================================================
-# TWELVE DATA FUNCTIONS (YOUR KEYS WORK HERE!)
+# API FUNCTIONS
 # ============================================================
 
-def get_twelve_data(symbol):
-    """Get real-time data from Twelve Data - works with your keys!"""
+def get_gold_price():
+    """Fetch live XAU/USD gold price"""
+
     try:
-        # Map symbols
-        api_symbol = 'XAU/USD' if symbol == 'XAUUSD' else 'BTC/USD'
-        
-        # Get time series for RSI and S/R
-        url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval=5min&outputsize=30&apikey={TWELVE_API_KEY}"
-        
-        print(f"Fetching {symbol} from Twelve Data...")
-        response = requests.get(url, timeout=15)
+        url = "https://api.gold-api.com/price/XAU"
+
+        response = requests.get(url, timeout=10)
+
+        if response.status_code != 200:
+            print(f"Gold API Error: {response.status_code}")
+            return None
+
         data = response.json()
-        
-        # Check for errors
-        if 'code' in data and data['code'] == 401:
-            print(f"API key error: {data.get('message', 'Invalid key')}")
+
+        return float(data["price"])
+
+    except Exception as e:
+        print(f"Gold price error: {e}")
+        return None
+
+
+def get_bitcoin_price():
+    """Fetch live BTC/USD price"""
+
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+
+        response = requests.get(url, timeout=10)
+
+        if response.status_code != 200:
+            print(f"BTC API Error: {response.status_code}")
             return None
-            
-        if 'values' not in data or not data['values']:
-            print(f"No values for {symbol}: {data}")
+
+        data = response.json()
+
+        return data["bitcoin"]["usd"]
+
+    except Exception as e:
+        print(f"Bitcoin price error: {e}")
+        return None
+
+
+def get_bitcoin_history():
+    """Fetch BTC history for RSI"""
+
+    try:
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7"
+
+        response = requests.get(url, timeout=10)
+
+        if response.status_code != 200:
+            print(f"CoinGecko Error: {response.status_code}")
             return None
-        
-        # Extract prices
-        prices = []
-        for v in data['values']:
-            try:
-                prices.append(float(v['close']))
-            except:
-                continue
-        
+
+        data = response.json()
+
+        prices = data.get("prices", [])
+
         if not prices:
             return None
-            
-        current_price = prices[-1]
-        
-        # Calculate RSI
-        rsi = 50
-        if len(prices) >= 15:
-            gains = 0
-            losses = 0
-            for i in range(len(prices)-15, len(prices)-1):
-                diff = prices[i+1] - prices[i]
-                if diff >= 0:
-                    gains += diff
-                else:
-                    losses -= diff
-            avg_gain = gains / 14
-            avg_loss = losses / 14
-            if avg_loss > 0:
-                rs = avg_gain / avg_loss
-                rsi = 100 - (100 / (1 + rs))
-                rsi = round(rsi, 1)
-        
-        # Calculate support/resistance
-        recent = prices[-20:]
-        high = max(recent)
-        low = min(recent)
-        range_val = high - low
-        support = low + (range_val * 0.236)
-        resistance = high - (range_val * 0.236)
-        
-        return {
-            'price': round(current_price, 2),
-            'rsi': rsi,
-            'support': round(support, 2),
-            'resistance': round(resistance, 2)
-        }
+
+        return [p[1] for p in prices[-30:]]
+
     except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
+        print(f"Bitcoin history error: {e}")
         return None
+
+
+# ============================================================
+# RSI CALCULATION
+# ============================================================
+
+def calculate_rsi(prices, period=14):
+
+    if not prices or len(prices) < period + 1:
+        return 50
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(prices)):
+
+        change = prices[i] - prices[i - 1]
+
+        if change > 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
+
+    avg_gain = sum(gains[-period:]) / period if gains else 0
+    avg_loss = sum(losses[-period:]) / period if losses else 0
+
+    if avg_loss == 0:
+        return 100
+
+    rs = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return round(rsi, 2)
+
+
+# ============================================================
+# SUPPORT & RESISTANCE
+# ============================================================
+
+def calculate_support_resistance(price, asset):
+
+    if asset == "XAUUSD":
+        support = round(price - 10, 2)
+        resistance = round(price + 10, 2)
+
+    else:
+        support = round(price - 2000, 0)
+        resistance = round(price + 2000, 0)
+
+    return support, resistance
+
 
 # ============================================================
 # SIGNAL GENERATION
 # ============================================================
 
-def generate_signal(asset_key, market_data):
-    """Generate trading signal based on RSI + Support/Resistance"""
-    price = market_data['price']
-    rsi = market_data['rsi']
-    support = market_data['support']
-    resistance = market_data['resistance']
-    
-    # Check if near support/resistance
-    near_support = abs(price - support) < (1.5 if asset_key == 'XAUUSD' else 150)
-    near_resistance = abs(price - resistance) < (1.5 if asset_key == 'XAUUSD' else 150)
-    
-    # Scalping strategy
+def generate_signal(asset, price, rsi, support, resistance):
+
+    near_support = abs(price - support) < (
+        10 if asset == "XAUUSD" else 500
+    )
+
+    near_resistance = abs(price - resistance) < (
+        10 if asset == "XAUUSD" else 500
+    )
+
+    signal = "HOLD"
+    confidence = "Low"
+
     if rsi < 35 and near_support:
-        signal = 'BUY'
-        confidence = 'High'
-        reasoning = f'RSI oversold ({rsi}) near support ${support}'
-        take_profit = round(price * 1.005, 2) if asset_key == 'XAUUSD' else round(price * 1.01, 0)
-        stop_loss = round(price * 0.995, 2) if asset_key == 'XAUUSD' else round(price * 0.99, 0)
+        signal = "BUY"
+        confidence = "High"
+
     elif rsi > 65 and near_resistance:
-        signal = 'SELL'
-        confidence = 'High'
-        reasoning = f'RSI overbought ({rsi}) near resistance ${resistance}'
-        take_profit = round(price * 0.995, 2) if asset_key == 'XAUUSD' else round(price * 0.99, 0)
-        stop_loss = round(price * 1.005, 2) if asset_key == 'XAUUSD' else round(price * 1.01, 0)
+        signal = "SELL"
+        confidence = "High"
+
     elif rsi < 30:
-        signal = 'BUY'
-        confidence = 'Medium'
-        reasoning = f'RSI deeply oversold ({rsi}) - potential bounce'
-        take_profit = round(price * 1.003, 2) if asset_key == 'XAUUSD' else round(price * 1.005, 0)
-        stop_loss = round(price * 0.997, 2) if asset_key == 'XAUUSD' else round(price * 0.995, 0)
+        signal = "BUY"
+        confidence = "Medium"
+
     elif rsi > 70:
-        signal = 'SELL'
-        confidence = 'Medium'
-        reasoning = f'RSI deeply overbought ({rsi}) - potential drop'
-        take_profit = round(price * 0.997, 2) if asset_key == 'XAUUSD' else round(price * 0.995, 0)
-        stop_loss = round(price * 1.003, 2) if asset_key == 'XAUUSD' else round(price * 1.005, 0)
+        signal = "SELL"
+        confidence = "Medium"
+
+    # TP / SL
+
+    if signal == "BUY":
+
+        tp = round(price * 1.005, 2)
+        sl = round(price * 0.995, 2)
+
+    elif signal == "SELL":
+
+        tp = round(price * 0.995, 2)
+        sl = round(price * 1.005, 2)
+
     else:
-        signal = 'HOLD'
-        confidence = 'Low'
-        reasoning = f'RSI at {rsi} - waiting for setup near S/R'
-        take_profit = price
-        stop_loss = price
-    
-    return {
-        'signal': signal,
-        'confidence': confidence,
-        'take_profit': take_profit,
-        'stop_loss': stop_loss,
-        'reasoning': reasoning
-    }
+
+        tp = price
+        sl = price
+
+    reasoning = f"RSI={rsi} | Support={support} | Resistance={resistance}"
+
+    return signal, confidence, tp, sl, reasoning
+
 
 # ============================================================
-# TRADING BOT LOOP
+# BOT LOOP
 # ============================================================
 
-def trading_bot_loop():
-    """Main trading loop - runs every 60 seconds"""
-    print("=" * 50)
-    print("🤖 TRADING BOT STARTED!")
-    print(f"📊 Twelve Data Key: {TWELVE_API_KEY[:10]}...")
-    print("=" * 50)
-    
-    # Initial fetch immediately
-    print("🔄 Fetching initial data...")
-    
+def trading_bot():
+
+    print("=" * 60)
+    print("🚀 AI DUAL SCALPER BOT STARTED")
+    print("=" * 60)
+
     while True:
-        for asset_key in ['XAUUSD', 'BTCUSD']:
-            try:
-                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Fetching {asset_key}...")
-                
-                market_data = get_twelve_data(asset_key)
-                
-                if market_data and market_data['price']:
-                    signal_data = generate_signal(asset_key, market_data)
-                    
-                    assets_data[asset_key] = {
-                        'price': market_data['price'],
-                        'rsi': market_data['rsi'],
-                        'support': market_data['support'],
-                        'resistance': market_data['resistance'],
-                        'signal': signal_data['signal'],
-                        'confidence': signal_data['confidence'],
-                        'position': assets_data[asset_key].get('position'),
-                        'take_profit': signal_data['take_profit'],
-                        'stop_loss': signal_data['stop_loss'],
-                        'reasoning': signal_data['reasoning'],
-                        'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    }
-                    
-                    print(f"   ✅ {asset_key}: ${market_data['price']:.2f}")
-                    print(f"   📊 RSI: {market_data['rsi']} | Signal: {signal_data['signal']}")
-                    print(f"   🛡️ Support: ${market_data['support']} | Resistance: ${market_data['resistance']}")
-                else:
-                    print(f"   ❌ Failed to get data for {asset_key}")
-                    # Keep existing data, just mark as stale
-                    assets_data[asset_key]['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                time.sleep(3)  # Delay between assets
-                
-            except Exception as e:
-                print(f"❌ Error in {asset_key}: {e}")
-        
-        print(f"\n⏳ Waiting 60 seconds... Next update at {datetime.now().strftime('%H:%M:%S')}")
+
+        try:
+
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            print(f"\n[{current_time}] Updating market data...")
+
+            # ====================================================
+            # GOLD
+            # ====================================================
+
+            gold_price = get_gold_price()
+
+            if gold_price:
+
+                gold_rsi = 50
+
+                gold_support, gold_resistance = calculate_support_resistance(
+                    gold_price,
+                    "XAUUSD"
+                )
+
+                signal, confidence, tp, sl, reasoning = generate_signal(
+                    "XAUUSD",
+                    gold_price,
+                    gold_rsi,
+                    gold_support,
+                    gold_resistance
+                )
+
+                assets_data["XAUUSD"] = {
+                    "price": gold_price,
+                    "rsi": gold_rsi,
+                    "support": gold_support,
+                    "resistance": gold_resistance,
+                    "signal": signal,
+                    "confidence": confidence,
+                    "take_profit": tp,
+                    "stop_loss": sl,
+                    "reasoning": reasoning,
+                    "last_update": current_time
+                }
+
+                print(f"✅ XAUUSD: ${gold_price}")
+
+            else:
+
+                print("❌ Failed to fetch XAUUSD")
+
+            time.sleep(2)
+
+            # ====================================================
+            # BITCOIN
+            # ====================================================
+
+            btc_price = get_bitcoin_price()
+
+            btc_history = get_bitcoin_history()
+
+            if btc_price:
+
+                btc_rsi = calculate_rsi(btc_history)
+
+                btc_support, btc_resistance = calculate_support_resistance(
+                    btc_price,
+                    "BTCUSD"
+                )
+
+                signal, confidence, tp, sl, reasoning = generate_signal(
+                    "BTCUSD",
+                    btc_price,
+                    btc_rsi,
+                    btc_support,
+                    btc_resistance
+                )
+
+                assets_data["BTCUSD"] = {
+                    "price": btc_price,
+                    "rsi": btc_rsi,
+                    "support": btc_support,
+                    "resistance": btc_resistance,
+                    "signal": signal,
+                    "confidence": confidence,
+                    "take_profit": tp,
+                    "stop_loss": sl,
+                    "reasoning": reasoning,
+                    "last_update": current_time
+                }
+
+                print(f"✅ BTCUSD: ${btc_price}")
+
+            else:
+
+                print("❌ Failed to fetch BTCUSD")
+
+        except Exception as e:
+
+            print(f"Loop error: {e}")
+
+        print("⏳ Waiting 60 seconds...\n")
+
         time.sleep(60)
 
+
 # ============================================================
-# WEB UI - SIMPLE BUT COMPLETE
+# HTML UI
 # ============================================================
 
-HTML_TEMPLATE = """
+HTML = """
+
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🤖 AI Dual Scalper | Live Trading Bot</title>
-    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: system-ui, -apple-system, sans-serif;
-            background: linear-gradient(135deg, #0a0f1a 0%, #0f172a 100%);
-            color: #eef2ff;
-            padding: 20px;
-        }
-        .container { max-width: 1600px; margin: 0 auto; }
-        .header {
-            background: rgba(17, 24, 39, 0.9);
-            backdrop-filter: blur(10px);
-            border-radius: 28px;
-            padding: 24px;
-            margin-bottom: 24px;
-            border: 1px solid #1e293b;
-            text-align: center;
-        }
-        .header h1 { font-size: 1.8rem; color: #fbbf24; }
-        .header p { color: #94a3b8; margin-top: 8px; }
-        .status-badge {
-            display: inline-block;
-            background: #10b981;
-            padding: 8px 20px;
-            border-radius: 40px;
-            font-size: 0.75rem;
-            margin-top: 12px;
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-        }
-        .dual-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
-        .card {
-            background: rgba(17, 24, 39, 0.9);
-            backdrop-filter: blur(10px);
-            border-radius: 24px;
-            border: 1px solid #1e293b;
-            overflow: hidden;
-        }
-        .card-header {
-            background: #111827;
-            padding: 16px 20px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            border-bottom: 1px solid #1e293b;
-        }
-        .card-header span { color: #fbbf24; }
-        .price {
-            font-size: 2.2rem;
-            font-weight: bold;
-            color: #fbbf24;
-            text-align: center;
-            padding: 20px;
-            font-family: monospace;
-        }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            padding: 0 20px 20px 20px;
-        }
-        .stat {
-            background: #0f172a;
-            padding: 12px;
-            border-radius: 16px;
-            text-align: center;
-        }
-        .stat-label { font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; }
-        .stat-value { font-size: 1.2rem; font-weight: bold; font-family: monospace; }
-        .signal-display {
-            text-align: center;
-            padding: 20px;
-            margin: 0 20px 20px 20px;
-            border-radius: 20px;
-            font-size: 2rem;
-            font-weight: bold;
-        }
-        .signal-BUY { background: rgba(16, 185, 129, 0.2); border: 2px solid #10b981; color: #10b981; }
-        .signal-SELL { background: rgba(239, 68, 68, 0.2); border: 2px solid #ef4444; color: #ef4444; }
-        .signal-HOLD { background: rgba(245, 158, 11, 0.2); border: 2px solid #f59e0b; color: #f59e0b; }
-        .reasoning {
-            background: #0f172a;
-            margin: 0 20px 20px 20px;
-            padding: 12px;
-            border-radius: 12px;
-            font-size: 0.8rem;
-            color: #cbd5e1;
-        }
-        .chart-container { width: 100%; height: 350px; padding: 12px; }
-        .footer {
-            text-align: center;
-            margin-top: 24px;
-            font-size: 0.7rem;
-            color: #64748b;
-        }
-        @media (max-width: 768px) {
-            .dual-grid { grid-template-columns: 1fr; }
-            .price { font-size: 1.5rem; }
-            .signal-display { font-size: 1.3rem; }
-            .stats { grid-template-columns: repeat(3, 1fr); gap: 8px; }
-            .stat-value { font-size: 0.9rem; }
-        }
-    </style>
+<title>AI Dual Scalper</title>
+
+<style>
+
+body{
+    background:#0f172a;
+    color:white;
+    font-family:Arial;
+    padding:20px;
+}
+
+.card{
+    background:#111827;
+    padding:20px;
+    border-radius:20px;
+    margin-bottom:20px;
+}
+
+.price{
+    font-size:40px;
+    color:gold;
+}
+
+.buy{
+    color:#10b981;
+}
+
+.sell{
+    color:#ef4444;
+}
+
+.hold{
+    color:#f59e0b;
+}
+
+</style>
+
 </head>
+
 <body>
-<div class="container">
-    <div class="header">
-        <h1>⚡ AI Dual Scalper | Live Trading Bot</h1>
-        <p>XAUUSD + BTCUSD | 5-Minute Scalping | Real-Time Data</p>
-        <div class="status-badge" id="statusBadge">🟢 LIVE DATA</div>
-    </div>
 
-    <div class="dual-grid">
-        <!-- XAUUSD Card -->
-        <div class="card">
-            <div class="card-header">🥇 <span>XAUUSD (Gold)</span></div>
-            <div class="price" id="xauPrice">$---</div>
-            <div class="stats">
-                <div class="stat"><div class="stat-label">RSI</div><div class="stat-value" id="xauRsi">---</div></div>
-                <div class="stat"><div class="stat-label">Support</div><div class="stat-value" id="xauSupport">---</div></div>
-                <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value" id="xauResistance">---</div></div>
-            </div>
-            <div class="signal-display" id="xauSignal">WAITING</div>
-            <div class="reasoning" id="xauReasoning">Awaiting market data...</div>
-        </div>
+<h1>🤖 AI Dual Scalper Bot</h1>
 
-        <!-- BTCUSD Card -->
-        <div class="card">
-            <div class="card-header">₿ <span>BTCUSD (Bitcoin)</span></div>
-            <div class="price" id="btcPrice">$---</div>
-            <div class="stats">
-                <div class="stat"><div class="stat-label">RSI</div><div class="stat-value" id="btcRsi">---</div></div>
-                <div class="stat"><div class="stat-label">Support</div><div class="stat-value" id="btcSupport">---</div></div>
-                <div class="stat"><div class="stat-label">Resistance</div><div class="stat-value" id="btcResistance">---</div></div>
-            </div>
-            <div class="signal-display" id="btcSignal">WAITING</div>
-            <div class="reasoning" id="btcReasoning">Awaiting market data...</div>
-        </div>
-    </div>
+<div class="card">
 
-    <!-- TradingView Charts -->
-    <div class="card">
-        <div class="card-header">📈 <span>Live Charts (5-Minute)</span></div>
-        <div class="chart-container" id="tv-xau-container"></div>
-        <div class="chart-container" id="tv-btc-container"></div>
-    </div>
+<h2>XAU/USD</h2>
 
-    <div class="footer">
-        <p>🤖 Bot runs 24/7 | Updates every 60 seconds | Auto-trading ready</p>
-        <p id="updateTime">Waiting for data...</p>
-    </div>
+<div class="price" id="goldPrice">$---</div>
+
+<p>RSI: <span id="goldRsi">---</span></p>
+
+<p>Signal:
+<span id="goldSignal">WAITING</span>
+</p>
+
+<p id="goldReason">Loading...</p>
+
+</div>
+
+<div class="card">
+
+<h2>BTC/USD</h2>
+
+<div class="price" id="btcPrice">$---</div>
+
+<p>RSI: <span id="btcRsi">---</span></p>
+
+<p>Signal:
+<span id="btcSignal">WAITING</span>
+</p>
+
+<p id="btcReason">Loading...</p>
+
 </div>
 
 <script>
-    let xauChart, btcChart;
-    let lastUpdateTime = null;
-    
-    function initCharts() {
-        if (typeof TradingView !== 'undefined') {
-            try {
-                xauChart = new TradingView.widget({
-                    width: "100%", height: 350, symbol: "OANDA:XAUUSD", interval: "5", 
-                    theme: "dark", style: "1", locale: "en",
-                    container_id: "tv-xau-container", studies: ["RSI@tv-basicstudies"], 
-                    autosize: false
-                });
-                btcChart = new TradingView.widget({
-                    width: "100%", height: 350, symbol: "BITSTAMP:BTCUSD", interval: "5", 
-                    theme: "dark", style: "1", locale: "en",
-                    container_id: "tv-btc-container", studies: ["RSI@tv-basicstudies"]
-                });
-                console.log("✅ Charts loaded");
-            } catch(e) {
-                console.log("Chart error:", e);
-            }
-        } else {
-            setTimeout(initCharts, 1000);
+
+async function updateData(){
+
+    try{
+
+        const response = await fetch('/api/data')
+
+        const data = await response.json()
+
+        // GOLD
+
+        if(data.XAUUSD.price){
+
+            document.getElementById("goldPrice").innerHTML =
+            "$" + data.XAUUSD.price
+
+            document.getElementById("goldRsi").innerHTML =
+            data.XAUUSD.rsi
+
+            document.getElementById("goldSignal").innerHTML =
+            data.XAUUSD.signal
+
+            document.getElementById("goldReason").innerHTML =
+            data.XAUUSD.reasoning
         }
+
+        // BTC
+
+        if(data.BTCUSD.price){
+
+            document.getElementById("btcPrice").innerHTML =
+            "$" + data.BTCUSD.price
+
+            document.getElementById("btcRsi").innerHTML =
+            data.BTCUSD.rsi
+
+            document.getElementById("btcSignal").innerHTML =
+            data.BTCUSD.signal
+
+            document.getElementById("btcReason").innerHTML =
+            data.BTCUSD.reasoning
+        }
+
+    }catch(err){
+
+        console.log(err)
+
     }
-    
-    function updateUI() {
-        fetch('/api/all')
-            .then(res => res.json())
-            .then(data => {
-                // Update XAUUSD
-                if (data.XAUUSD.price) {
-                    document.getElementById('xauPrice').innerHTML = `$${data.XAUUSD.price.toFixed(2)}`;
-                    document.getElementById('xauRsi').innerHTML = data.XAUUSD.rsi || '---';
-                    document.getElementById('xauSupport').innerHTML = data.XAUUSD.support ? `$${data.XAUUSD.support}` : '---';
-                    document.getElementById('xauResistance').innerHTML = data.XAUUSD.resistance ? `$${data.XAUUSD.resistance}` : '---';
-                    
-                    const xauSignalDiv = document.getElementById('xauSignal');
-                    xauSignalDiv.className = `signal-display signal-${data.XAUUSD.signal}`;
-                    xauSignalDiv.innerHTML = data.XAUUSD.signal;
-                    document.getElementById('xauReasoning').innerHTML = `💭 ${data.XAUUSD.reasoning || 'Analyzing...'}`;
-                }
-                
-                // Update BTCUSD
-                if (data.BTCUSD.price) {
-                    document.getElementById('btcPrice').innerHTML = `$${data.BTCUSD.price.toFixed(0)}`;
-                    document.getElementById('btcRsi').innerHTML = data.BTCUSD.rsi || '---';
-                    document.getElementById('btcSupport').innerHTML = data.BTCUSD.support ? `$${data.BTCUSD.support}` : '---';
-                    document.getElementById('btcResistance').innerHTML = data.BTCUSD.resistance ? `$${data.BTCUSD.resistance}` : '---';
-                    
-                    const btcSignalDiv = document.getElementById('btcSignal');
-                    btcSignalDiv.className = `signal-display signal-${data.BTCUSD.signal}`;
-                    btcSignalDiv.innerHTML = data.BTCUSD.signal;
-                    document.getElementById('btcReasoning').innerHTML = `💭 ${data.BTCUSD.reasoning || 'Analyzing...'}`;
-                }
-                
-                // Update timestamp
-                if (data.XAUUSD.last_update && data.XAUUSD.last_update !== lastUpdateTime) {
-                    lastUpdateTime = data.XAUUSD.last_update;
-                    document.getElementById('updateTime').innerHTML = `Last update: ${data.XAUUSD.last_update}`;
-                    document.getElementById('statusBadge').innerHTML = '🟢 LIVE DATA';
-                    document.getElementById('statusBadge').style.background = '#10b981';
-                } else if (!data.XAUUSD.price) {
-                    document.getElementById('statusBadge').innerHTML = '🟡 FETCHING DATA...';
-                }
-            })
-            .catch(err => {
-                console.log('Fetch error:', err);
-                document.getElementById('statusBadge').innerHTML = '🔴 CONNECTING...';
-            });
-    }
-    
-    // Initialize
-    setTimeout(initCharts, 500);
-    updateUI();
-    setInterval(updateUI, 3000);  // Update every 3 seconds
+
+}
+
+updateData()
+
+setInterval(updateData, 5000)
+
 </script>
+
 </body>
 </html>
+
 """
 
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
 
-@app.route('/api/all')
-def api_all():
+# ============================================================
+# FLASK ROUTES
+# ============================================================
+
+@app.route("/")
+def home():
+    return render_template_string(HTML)
+
+
+@app.route("/api/data")
+def api_data():
     return jsonify(assets_data)
 
+
 # ============================================================
-# START THE BOT
+# START BOT
 # ============================================================
 
-print("=" * 60)
-print("🚀 AI DUAL SCALPER - LIVE TRADING BOT")
-print("=" * 60)
-print(f"📊 Twelve Data API Key: {TWELVE_API_KEY[:10]}...")
-print("✅ Bot will fetch real-time data every 60 seconds")
-print("=" * 60)
+bot_thread = threading.Thread(
+    target=trading_bot,
+    daemon=True
+)
 
-# Start trading bot thread
-bot_thread = threading.Thread(target=trading_bot_loop, daemon=True)
 bot_thread.start()
-print("✅ Trading bot thread started!")
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+print("✅ Trading bot thread started")
+
+
+# ============================================================
+# RUN FLASK
+# ============================================================
+
+if __name__ == "__main__":
+
+    port = int(os.environ.get("PORT", 5000))
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
