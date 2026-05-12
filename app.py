@@ -12,8 +12,8 @@ app = Flask(__name__)
 # ============================================================
 # CONFIGURATION - GET API KEYS FROM RENDER ENVIRONMENT
 # ============================================================
-GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
-TWELVE_API_KEY = os.environ.get('TWELVE_API_KEY', 'demo')
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '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')
+TWELVE_API_KEY = os.environ.get('TWELVE_API_KEY', '9663744f36eb47da84d6ddd016afaace')
 FXCM_TOKEN = os.environ.get('FXCM_TOKEN', '')  # Add your FXCM token
 
 # Global data storage for both assets
